@@ -22,7 +22,7 @@ from uuid import uuid4
 
 from telethon.tl.tlobject import TLObject
 
-import heroku._herokutl_compat  # noqa: F401  installs herokutl->telethon alias
+import heroku._herokutl_compat
 
 from . import main, security, utils, validators
 from ._internal import resolve_client_id, set_client_id, tag_client_id
@@ -228,8 +228,6 @@ class InfiniteLoop:
         self._task = None
 
     def __del__(self):
-        # May be called after the event loop is closed (interpreter
-        # shutdown), so it must never raise
         if self._task is None:
             return
 
@@ -249,8 +247,6 @@ def loop(
 
 MODULES_NAME = "Modules"
 
-#: Attribute of a module, which holds the last delivered lifecycle signal
-#: (`enabled` / `disabled`). See `Modules.fire_lifecycle_hook`
 LIFECYCLE_STATE_ATTR = "__heroku_lifecycle_state__"
 
 ru_keys = 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,'
@@ -265,6 +261,47 @@ BASE_DIR = (
 MODULES_DIR = os.path.join(BASE_DIR, "Modules")
 MODULES_PATH = Path(MODULES_DIR)
 MODULES_PATH.mkdir(parents=True, exist_ok=True)
+
+
+def module_class_name(source: str | bytes) -> str | None:
+    if isinstance(source, bytes):
+        try:
+            source = source.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, TypeError):
+        return None
+
+    return next(
+        (
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and any(
+                isinstance(base, (ast.Attribute, ast.Name))
+                and ast.unparse(base).split(".")[-1] == "Module"
+                for base in node.bases
+            )
+        ),
+        None,
+    )
+
+
+def save_module_source(source: str | bytes, class_name: str | None = None) -> Path:
+    class_name = class_name or module_class_name(source)
+    if not class_name or not class_name.isidentifier():
+        raise ValueError("Module class name could not be determined")
+
+    if isinstance(source, str):
+        source = source.encode("utf-8")
+
+    path = MODULES_PATH / f"{class_name}.py"
+    path.write_bytes(source)
+    return path
+
 
 def _iter_module_files(
     directory: str | Path,
@@ -568,9 +605,8 @@ class Modules:
 
         cls_name = ret.__class__.__name__
 
-        if save_fs and origin == "<string>":
-            path = os.path.join(MODULES_DIR, f"{cls_name}.py")
-            Path(path).write_text(spec.loader.data.decode(), encoding="utf-8")
+        if save_fs:
+            path = save_module_source(spec.loader.data, cls_name)
             logger.debug("Saved class %s to path %s", cls_name, path)
 
         return ret
@@ -1013,14 +1049,10 @@ class Modules:
         self.register_bot_update_handlers(mod)
 
         if userbot_disabled:
-            # Userbot is dormant (`.disable`), so the module must know it
-            # right after `client_ready`, just like it would be notified
-            # if `.disable` was called while it was running
             await self.fire_lifecycle_hook("on_disable", only=mod)
 
     @staticmethod
     def _overrides_lifecycle_hook(mod: typing.Any, hook: str) -> bool:
-        """Whether `mod` actually implements the `hook`, not just inherits it"""
         own = getattr(type(mod), hook, None)
         return own is not None and own is not getattr(Module, hook, None)
 
@@ -1057,21 +1089,6 @@ class Modules:
         only: Module | None = None,
         timeout: float = 15.0,
     ) -> list[str]:
-        """
-        Broadcast the `on_disable` / `on_enable` signal to modules & libraries.
-
-        Works just like `client_ready`: a hook may be declared either as
-        `async def on_disable(self)` or as `async def on_disable(self, client, db)`.
-
-        Signals are idempotent - a module never gets `on_disable` twice in
-        a row, and `on_enable` is only delivered to modules, which were
-        actually put to sleep.
-
-        :param hook: `on_disable` or `on_enable`
-        :param only: notify a single module instead of all of them
-        :param timeout: max amount of seconds for one hook to complete
-        :return: names of the notified modules
-        """
         if hook not in {"on_disable", "on_enable"}:
             raise ValueError(f"Unknown lifecycle hook: {hook}")
 

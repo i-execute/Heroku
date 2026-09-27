@@ -160,21 +160,13 @@ class InlineManager(
 
         self._bot_update_handlers: dict[str, tuple[str, typing.Callable]] = {}
         self._bot_handler_refs: dict[str, tuple[typing.Callable, object]] = {}
-
-        #: Set by `.disable` - the bot is connected, but processes nothing
         self._suspended: bool = False
 
     @property
     def suspended(self) -> bool:
-        """Whether the inline bot is frozen by `.disable`"""
         return self._suspended
 
     async def suspend(self) -> bool:
-        """
-        Detach every handler of the inline bot and stop its background
-        tasks. Called by `.disable` - the bot stays online (so `.enable`
-        can restore it instantly), but reacts to absolutely nothing.
-        """
         if self._suspended:
             return False
 
@@ -199,7 +191,6 @@ class InlineManager(
         return True
 
     async def resume(self) -> bool:
-        """Undo :meth:`suspend` - called by `.enable`"""
         if not self._suspended:
             return False
 
@@ -391,8 +382,6 @@ class InlineManager(
         self._cleaner_task = asyncio.ensure_future(self._cleaner())
 
         if self._db.get(main.__name__, "heroku_disabled", False):
-            # Booted (or re-registered) while the userbot is dormant:
-            # the bot must not process anything until `.enable`
             self._suspended = False
             await self.suspend()
 

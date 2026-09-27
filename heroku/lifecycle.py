@@ -1,28 +1,6 @@
 # CopyLeft 2026 github.com/i-execute // i_execute.t.me
 # Licensed under AGPLv3.
 
-"""
-Global kill switch of the userbot (`.disable` / `.enable`).
-
-`.disable` puts Heroku into the *dormant* state, which means:
-
-* every event handler is detached from the main client, except **one**
-  watcher, which does nothing but wait for `.enable`;
-* the inline bot stops processing any updates (handlers are detached too);
-* every module loop (``@loader.loop``) is stopped;
-* every asyncio task owned by a module is cancelled;
-* every child process spawned by the userbot is killed;
-* modules are notified with the ``on_disable`` hook, so they can shut
-  their own stuff down gracefully (works exactly like ``client_ready``).
-
-`.enable` rolls everything back and notifies modules with ``on_enable``.
-
-The state is persistent. If the userbot is restarted (or crashes) while
-disabled, it boots straight into the dormant state: no loops, no watchers,
-no handlers - only the `.enable` watcher, which accepts the command from
-the owner himself or from any member of the ``owner`` security group.
-"""
-
 import asyncio
 import contextlib
 import logging
@@ -36,40 +14,29 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Database scope of the flag (`heroku.main`). Imported lazily - this module
-#: must stay importable from `heroku.dispatcher`, which `heroku.main` imports
 MAIN_SCOPE = f"{__package__}.main"
 
-#: Key of the persistent flag. Kept in the `heroku.main` scope for backwards
-#: compatibility - a lot of core parts read it directly.
 DISABLED_FLAG = "heroku_disabled"
 
-#: Key of the persistent dormant-state payload (`lifecycle.__name__` scope)
 STATE_KEY = "disable_state"
 
-#: Legacy (pre-lifecycle) storage of stopped loops
 LEGACY_LOOPS_OWNER = "heroku.disabled_loops"
 LEGACY_LOOPS_KEY = "modules"
 
-#: How long a single `on_disable`/`on_enable` hook may run
 HOOK_TIMEOUT = 15.0
 
-#: How long to wait for loops to actually stop
 LOOP_STOP_TIMEOUT = 5.0
 
-#: How long to wait for killed children to die
 CHILD_KILL_TIMEOUT = 3.0
 
 
 class _SafeDict(dict):
-    """`str.format_map` helper, which keeps unknown placeholders as is"""
 
     def __missing__(self, key: str) -> str:
         return "{" + key + "}"
 
 
 class LifecycleReport(typing.NamedTuple):
-    """Result of a `.disable`/`.enable` call"""
 
     action: str
     changed: bool
@@ -95,22 +62,12 @@ class LifecycleReport(typing.NamedTuple):
 
 
 class LifecycleManager:
-    """
-    Owns the dormant state of the userbot.
-
-    Single instance per client, available as ``client.lifecycle`` and as
-    ``client.dispatcher.lifecycle``.
-    """
 
     def __init__(self, client: "CustomTelegramClient", db: "Database"):
         self._client = client
         self._db = db
         self._lock = asyncio.Lock()
         self._startup_applied = False
-
-    # ------------------------------------------------------------------ #
-    # Lazy references (everything is created in different places of main) #
-    # ------------------------------------------------------------------ #
 
     @property
     def _modules(self):
@@ -128,13 +85,8 @@ class LifecycleManager:
     def _security(self):
         return getattr(self._dispatcher, "security", None)
 
-    # ------------------------------------------------------------------ #
-    # State                                                              #
-    # ------------------------------------------------------------------ #
-
     @property
     def disabled(self) -> bool:
-        """Whether the userbot is currently in the dormant state"""
         return bool(self._db.get(MAIN_SCOPE, DISABLED_FLAG, False))
 
     @property
@@ -153,13 +105,8 @@ class LifecycleManager:
         if self._db.get(LEGACY_LOOPS_OWNER, LEGACY_LOOPS_KEY, None) is not None:
             self._db.set(LEGACY_LOOPS_OWNER, LEGACY_LOOPS_KEY, [])
 
-    # ------------------------------------------------------------------ #
-    # Permissions                                                        #
-    # ------------------------------------------------------------------ #
-
     @property
     def trusted_ids(self) -> set[int]:
-        """Users allowed to revive the userbot: owner + `owner` sec. group"""
         trusted = {int(getattr(self._client, "tg_id", 0) or 0)}
 
         security = self._security
@@ -171,17 +118,12 @@ class LifecycleManager:
         return trusted
 
     def is_trusted(self, user_id: int | None) -> bool:
-        """Whether `user_id` may use `.enable` while the userbot is dormant"""
         try:
             user_id = int(user_id)
         except (TypeError, ValueError):
             return False
 
         return user_id in self.trusted_ids
-
-    # ------------------------------------------------------------------ #
-    # Strings (taken from the `Updater` module, if it is loaded)          #
-    # ------------------------------------------------------------------ #
 
     def _prefix(self) -> str:
         modules = self._modules
@@ -192,13 +134,7 @@ class LifecycleManager:
         return self._db.get(MAIN_SCOPE, "command_prefix", ".")
 
     def string(self, key: str, default: str, **kwargs) -> str:
-        """
-        Get a user-facing string.
 
-        Strings live in the `Updater` module (so they can be translated
-        and edited in one place), but they must be available even when
-        the module is not loaded - hence the `default`.
-        """
         text = default
 
         modules = self._modules
@@ -212,10 +148,6 @@ class LifecycleManager:
             text = text.format_map(_SafeDict(prefix=self._prefix(), **kwargs))
 
         return text
-
-    # ------------------------------------------------------------------ #
-    # Loops                                                              #
-    # ------------------------------------------------------------------ #
 
     def _iter_loops(self) -> typing.Iterator[tuple[typing.Any, str, typing.Any]]:
         from .loader import InfiniteLoop
@@ -281,7 +213,6 @@ class LifecycleManager:
             if isinstance(item, (list, tuple)) and len(item) == 2
         }
 
-        # Legacy format: only module names were stored
         legacy = self._db.get(LEGACY_LOOPS_OWNER, LEGACY_LOOPS_KEY, [])
         legacy = {str(name) for name in legacy} if isinstance(legacy, list) else set()
 
@@ -308,10 +239,6 @@ class LifecycleManager:
                 logger.exception("Failed to restore loop %s.%s", classname, name)
 
         return started
-
-    # ------------------------------------------------------------------ #
-    # Tasks                                                              #
-    # ------------------------------------------------------------------ #
 
     def _owned_module_names(self) -> set[str]:
         modules = self._modules
@@ -377,10 +304,6 @@ class LifecycleManager:
 
         return cancelled
 
-    # ------------------------------------------------------------------ #
-    # Child processes                                                    #
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def _kill_children() -> int:
         try:
@@ -413,10 +336,6 @@ class LifecycleManager:
 
         return len(killed)
 
-    # ------------------------------------------------------------------ #
-    # Inline bot                                                         #
-    # ------------------------------------------------------------------ #
-
     async def _suspend_inline(self) -> bool:
         inline = self._inline
         if inline is None or not hasattr(inline, "suspend"):
@@ -439,10 +358,6 @@ class LifecycleManager:
             logger.exception("Failed to resume inline bot")
             return False
 
-    # ------------------------------------------------------------------ #
-    # Hooks                                                              #
-    # ------------------------------------------------------------------ #
-
     async def _fire_hook(self, hook: str) -> int:
         modules = self._modules
         if modules is None or not hasattr(modules, "fire_lifecycle_hook"):
@@ -454,42 +369,24 @@ class LifecycleManager:
             logger.exception("Failed to broadcast %s hook", hook)
             return 0
 
-    # ------------------------------------------------------------------ #
-    # Public API                                                         #
-    # ------------------------------------------------------------------ #
-
     async def disable(self, initiator: int | None = None) -> LifecycleReport:
-        """
-        Hard-off the userbot, leaving only the `.enable` watcher alive.
 
-        :param initiator: id of the user, who requested the shutdown
-        :return: report about everything, which was killed
-        """
         async with self._lock:
             if self.disabled:
                 return LifecycleReport("disable", False)
 
             logger.warning("Disabling userbot (initiator=%s)", initiator)
-
-            # 1. Persist the flag first: every other part of the core checks
-            #    it, so even if something below explodes, we stay off
             self._set_flag(True)
             self._save_state(
                 loops=self._snapshot_loops(),
                 since=int(time.time()),
                 initiator=int(initiator or 0),
             )
-
-            # 2. Detach every handler, leaving the single `.enable` watcher
             handlers = 0
             dispatcher = self._dispatcher
             if dispatcher is not None:
                 handlers = dispatcher.enter_dormant()
-
-            # 3. Notify modules while the client is still fully functional
             notified = await self._fire_hook("on_disable")
-
-            # 4. Kill everything the modules left behind
             loops = await self._stop_loops()
             inline = await self._suspend_inline()
             tasks = self._cancel_tasks()
@@ -519,12 +416,6 @@ class LifecycleManager:
             )
 
     async def enable(self, initiator: int | None = None) -> LifecycleReport:
-        """
-        Revive the userbot after `.disable`.
-
-        :param initiator: id of the user, who requested the revival
-        :return: report about everything, which was restored
-        """
         async with self._lock:
             if not self.disabled:
                 return LifecycleReport("enable", False)
@@ -565,13 +456,6 @@ class LifecycleManager:
             )
 
     async def apply_startup_state(self) -> bool:
-        """
-        Called once on boot, after all modules are loaded.
-
-        If the userbot was disabled before the restart, it must not come
-        back to life on its own: stop everything modules could have started
-        in `client_ready` and notify them with `on_disable`.
-        """
         if not self.disabled or self._startup_applied:
             return False
 

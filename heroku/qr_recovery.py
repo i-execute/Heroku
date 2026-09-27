@@ -38,7 +38,6 @@ async def _save_session(client, me) -> None:
 
 
 async def send_qr_recovery(api_id: int, api_hash: str) -> bool:
-    """Session died. Send QR to owner PM, wait for scan, restore session."""
     from telethon import TelegramClient
     from telethon.errors import SessionPasswordNeededError
     from telethon.sessions import MemorySession
@@ -119,7 +118,6 @@ async def send_qr_recovery(api_id: int, api_hash: str) -> bool:
 
 
 async def run_bot_setup() -> bool:
-    """Fresh install via owner PM: token in terminal, rest via bot."""
     from telethon import TelegramClient
     from telethon.errors import SessionPasswordNeededError
     from telethon.sessions import MemorySession

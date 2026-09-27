@@ -20,13 +20,6 @@ logger = logging.getLogger(__name__)
 
 class Events(InlineUnit):
     def _dormant_block(self: "InlineManager", user_id: int | None = None) -> bool:
-        """
-        Whether this update must be dropped because of `.disable`.
-
-        The inline bot is detached from its handlers by the kill switch,
-        so normally we never even get here - this is a safety net for
-        updates, which were already in flight when `.disable` was called.
-        """
         lifecycle = getattr(self._client, "lifecycle", None)
 
         if lifecycle is None:
@@ -402,11 +395,17 @@ class Events(InlineUnit):
                             **button.get("kwargs", {}),
                         )
                         try:
-                            await self._client.delete_messages(
-                                chosen_inline_query.user_id, [chosen_inline_query.msg_id]
+                            message_id = getattr(
+                                chosen_inline_query.msg_id,
+                                "id",
+                                chosen_inline_query.msg_id,
                             )
+                            await self._client.delete_messages(None, [message_id])
                         except Exception:
-                            pass
+                            logger.debug(
+                                "Failed to delete temporary inline input message",
+                                exc_info=True,
+                            )
                         return result
                     except Exception:
                         logger.exception(

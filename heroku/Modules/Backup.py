@@ -215,31 +215,38 @@ class Backup(loader.Module):
                     with zf.open("mods.zip") as modzip_bytes:
                         with zipfile.ZipFile(io.BytesIO(modzip_bytes.read())) as modzip:
                             names = modzip.namelist()
+                            restored_classes = set()
                             for name in names:
                                 if not Path(name).name.endswith(".py"):
                                     continue
 
-                                path = loader.MODULES_PATH / Path(name).name
                                 with modzip.open(name, "r") as module:
-                                    path.write_bytes(module.read())
+                                    source = module.read()
+                                class_name = loader.module_class_name(source)
+                                if not class_name:
+                                    logger.warning(
+                                        "restore: skipped %s: module class not found", name
+                                    )
+                                    continue
+                                loader.save_module_source(source, class_name)
+                                restored_classes.add(class_name)
 
                             if "db_mods.json" in names:
                                 links = orjson.loads(modzip.read("db_mods.json"))
                                 fetched = skipped = 0
                                 for mod, url in links.items():
-                                    if (
-                                        loader.MODULES_PATH
-                                        / f"{mod}.py"
-                                    ).exists():
+                                    if mod in restored_classes:
                                         continue
                                     try:
                                         r = await utils.run_sync(
                                             requests.get, url, timeout=30
                                         )
                                         r.raise_for_status()
-                                        (
-                                            loader.MODULES_PATH / f"{mod}.py"
-                                        ).write_bytes(r.content)
+                                        class_name = loader.module_class_name(r.content)
+                                        if not class_name:
+                                            raise ValueError("module class not found")
+                                        loader.save_module_source(r.content, class_name)
+                                        restored_classes.add(class_name)
                                         fetched += 1
                                     except Exception as e:
                                         skipped += 1

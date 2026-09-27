@@ -26,7 +26,7 @@ for mod in os.scandir(DEBUG_MODS_DIR):
     os.remove(mod.path)
 
 @loader.tds
-class Test(loader.Module):
+class Tester(loader.Module):
     """Perform operations based on userbot self-testing"""
 
     strings = {

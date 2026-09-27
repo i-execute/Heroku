@@ -1,13 +1,10 @@
 # CopyLeft 2026 github.com/i-execute // i_execute.t.me
 # Licensed under AGPLv3.
 
-# Inline-unit service strings (formerly langpacks/en.json inline.* keys).
-
 from __future__ import annotations
 
 
 class _ServiceStrings:
-    """Mirrors the Strings call surface: getkey/getdict/gettext."""
 
     _S = {
         "opening_form": "<b>Opening form...</b>",

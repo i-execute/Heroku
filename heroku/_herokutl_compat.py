@@ -1,11 +1,6 @@
 # CopyLeft 2026 github.com/i-execute // i_execute.t.me
 # Licensed under AGPLv3.
 
-# (c) Dan Gazizullin, 2021-2023. This file is part of the Hikka Userbot: github.com/hikariatama/Hikka
-
-# Compatibility alias: external modules import `herokutl`, the fork is vanilla
-# telethon. Maps herokutl.<path> -> telethon.<path> lazily.
-
 import sys
 import types
 
@@ -28,7 +23,7 @@ def _install() -> None:
         return
 
     herokutl = _HerokutlModule("herokutl")
-    herokutl.__path__ = []  # mark as package so submodule imports resolve
+    herokutl.__path__ = []
     sys.modules["herokutl"] = herokutl
 
 

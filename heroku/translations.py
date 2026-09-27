@@ -1,9 +1,6 @@
 # CopyLeft 2026 github.com/i-execute // i_execute.t.me
 # Licensed under AGPLv3.
 
-# Single strings source: each module holds ONE class-level `strings` dict,
-# accessed as self.strings["key"] (via the Strings wrapper in loader).
-
 import logging
 import typing
 
@@ -19,7 +16,6 @@ def fmt(text: str, kwargs: dict) -> str:
 
 
 class Strings:
-    """Dict-like accessor over a module's own `strings` dict."""
 
     def __init__(self, mod: typing.Any, translator: typing.Any = None):
         self._base_strings = mod.strings if isinstance(mod.strings, dict) else {}

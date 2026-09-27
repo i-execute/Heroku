@@ -35,11 +35,8 @@ _LAYOUT_TRANSLATION = str.maketrans(
     + 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,',
 )
 
-#: Commands, which are still accepted while the userbot is disabled.
-#: Everything else is dead until `.enable` is called.
 DORMANT_COMMANDS = frozenset({"enable"})
 
-#: For how long a message, consumed by the dormant watcher, is remembered
 DORMANT_CONSUMED_TTL = 10.0
 
 ALL_TAGS = [
@@ -133,32 +130,19 @@ class CommandDispatcher:
 
         self.raw_handlers = []
 
-        # Everything, which is spawned by the dispatcher, is tracked here,
-        # so `.disable` can cancel it in one go
         self._pending_tasks: set[asyncio.Task] = set()
 
-        # Handlers, detached by `.disable`, to be restored by `.enable`
         self._saved_handlers: list[tuple[Callable, typing.Any]] = []
         self._dormant_handler: tuple[Callable, typing.Any] | None = None
 
-        # Messages, already consumed by the dormant watcher. Telethon
-        # iterates over the (live) list of handlers, so without this the
-        # very same `.enable` message would be dispatched once again by
-        # the handlers we restore in the middle of the dispatch loop
         self._consumed_messages: collections.deque = collections.deque(maxlen=64)
-
-    # ------------------------------------------------------------------ #
-    # Event handlers bookkeeping (see `heroku.lifecycle`)                 #
-    # ------------------------------------------------------------------ #
 
     @property
     def pending_tasks(self) -> set[asyncio.Task]:
-        """Commands and watchers, which are being executed right now"""
         return self._pending_tasks
 
     @property
     def dormant(self) -> bool:
-        """Whether only the `.enable` watcher is attached to the client"""
         return self._dormant_handler is not None
 
     def _default_handlers(self) -> list[tuple[Callable, typing.Any]]:
@@ -180,7 +164,6 @@ class CommandDispatcher:
         return (chat_id, getattr(message, "id", 0) or 0)
 
     def _consume_message(self, message: Message):
-        """Mark the message as handled by the dormant watcher"""
         self._consumed_messages.append((self._message_key(message), time.time()))
 
     def _is_consumed(self, message: Message) -> bool:
@@ -201,13 +184,6 @@ class CommandDispatcher:
         return task
 
     def attach_handlers(self):
-        """
-        Attach event handlers to the client.
-
-        If the userbot was disabled before the (re)start, only the single
-        `.enable` watcher is attached - the userbot stays dead until the
-        owner revives it.
-        """
         if self.lifecycle.disabled:
             self.enter_dormant()
             return
@@ -216,12 +192,6 @@ class CommandDispatcher:
             self._client.add_event_handler(callback, builder)
 
     def enter_dormant(self) -> int:
-        """
-        Detach every handler of the userbot and attach the only one, which
-        survives `.disable` - the `.enable` watcher.
-
-        :return: amount of detached handlers
-        """
         if self.dormant:
             return 0
 
@@ -249,11 +219,6 @@ class CommandDispatcher:
         return len(saved)
 
     def leave_dormant(self) -> int:
-        """
-        Restore everything, which was detached by :meth:`enter_dormant`.
-
-        :return: amount of restored handlers
-        """
         if self._dormant_handler:
             callback, _ = self._dormant_handler
             with contextlib.suppress(Exception):
@@ -296,7 +261,6 @@ class CommandDispatcher:
         return names
 
     def _is_dormant_command(self, text: str, initiator: int) -> bool:
-        """Whether `text` is the `.enable` command (layout & aliases aware)"""
         if not isinstance(text, str) or not text.strip():
             return False
 
@@ -334,12 +298,6 @@ class CommandDispatcher:
 
     @tag_client_id("client.tg_id")
     async def handle_dormant(self, event: events.NewMessage):
-        """
-        The one and only handler, which survives `.disable`.
-
-        Listens for `.enable` from the owner or from any member of the
-        `owner` security group and brings the userbot back to life.
-        """
         if not self.lifecycle.disabled:
             return
 
@@ -389,9 +347,6 @@ class CommandDispatcher:
                     **report.as_dict,
                 ),
             )
-
-        # The list of handlers is mutated in the middle of telethon's
-        # dispatch loop, so stop it right here to avoid double handling
         raise events.StopPropagation
 
     async def _handle_ratelimit(self, message: Message, func: Callable) -> bool:
@@ -535,9 +490,6 @@ class CommandDispatcher:
         initiator = getattr(event, "sender_id", 0)
 
         if self.lifecycle.disabled:
-            # Safety net: even if some handler survived `.disable`, the only
-            # thing it may process is `.enable` from the owner or from the
-            # `owner` security group
             if not self.lifecycle.is_trusted(initiator) or not self._is_dormant_command(
                 event.message.message,
                 initiator,

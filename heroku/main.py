@@ -464,20 +464,17 @@ class Heroku:
 
     async def _initial_setup(self) -> bool:
         if get_config_key("owner_id"):
-            # owner already bound, but session lost -> QR recovery via bot PM
             from .qr_recovery import send_qr_recovery
 
             if await send_qr_recovery(
                 int(self.api_token.ID), self.api_token.HASH
             ):
-                # session was saved to disk after startup scan -> rescan
                 restart()
                 return True
 
         from .qr_recovery import run_bot_setup
 
         if await run_bot_setup():
-            # session was saved to disk after startup scan -> rescan
             restart()
             return True
 
@@ -645,9 +642,6 @@ class Heroku:
         dispatcher = CommandDispatcher(modules, client, db)
         client.dispatcher = dispatcher
         modules.check_security = dispatcher.check_security
-
-        # Attaches the full set of handlers, or - if the userbot was
-        # disabled before the restart - the only `.enable` watcher
         dispatcher.attach_handlers()
 
     async def amain(self, first: bool, client: CustomTelegramClient):
@@ -670,9 +664,6 @@ class Heroku:
         await modules.inline.register_manager()
         await db.ensure_content_channel()
         await modules.send_ready()
-
-        # Userbot was killed with `.disable` before the restart - make sure
-        # nothing, started by `client_ready`, survived the boot
         dormant = await client.lifecycle.apply_startup_state()
 
         if first and not dormant:

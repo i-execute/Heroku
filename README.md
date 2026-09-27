@@ -2,11 +2,13 @@
   <a href="https://t.me/I_execute"><img src="https://img.shields.io/badge/Telegram-@I__execute-26A5E4?style=flat&logo=telegram&logoColor=white" alt="Telegram" /></a>
 </p>
 
-# Heroku
+# Heroku personal fork
 
-Telegram userbot on Telethon. Personal fork, cleaned up.
+Telegram userbot on Telethon without backdoors.
 
 ## Install
+
+On first start: create bot and turn on inline mode with 100% feedback then API ID/hash from https://my.telegram.org
 
 ```bash
 cd ~
@@ -18,9 +20,9 @@ pip install -r Storage/requirements.txt
 python3 -m heroku
 ```
 
-Requires Python 3.12+ and git. On first start: API ID/hash from https://my.telegram.org, then your phone.
+Then login via your bot by QR code or manually and continue installation:
 
-### systemd (user)
+### systemd (user):
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -43,7 +45,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now heroku
 ```
 
-For root:
+### root:
 
 ```bash
 cat > /etc/systemd/system/heroku.service << EOF
@@ -71,7 +73,7 @@ systemctl enable --now heroku
 git pull
 ```
 
-Or `.update` from Telegram (manual only, no auto-updater).
+Or `.update` from Telegram
 
 ## Differences from upstream
 
