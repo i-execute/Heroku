@@ -251,8 +251,8 @@ class Executor(loader.Module):
         "name": "Executor",
         "running": "<b>Running:</b> <code>{}</code>\n",
         "finished": "\n<b>Exit code</b> <code>{}</code>",
-        "stdout": "\n<b>Stdout:</b>\n<pre><code class=\"language-stdout\">",
-        "stderr": "</code></pre>\n\n<b>Stderr:</b>\n<pre><code class=\"language-stderr\">",
+        "stdout": "\n<pre><code class=\"language-stdout\">",
+        "stderr": "</code></pre>\n<pre><code class=\"language-stderr\">",
         "end": "</code></pre>",
         "time_exec": "\n<b>Time:</b> <code>{}s</code>",
         "err": (
@@ -408,7 +408,7 @@ class Executor(loader.Module):
             self._shell_sessions[uid] = session
         return self._shell_sessions[uid]
 
-    @loader.command()
+    @loader.command(alias="terminal")
     async def exec(self, message: Message):
         """Run a shell command"""
         cmd = utils.get_args_raw(message)
