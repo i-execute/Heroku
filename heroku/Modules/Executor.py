@@ -249,8 +249,8 @@ class Executor(loader.Module):
 
     strings = {
         "name": "Executor",
-        "running": "<b>Running:</b> <code>{}</code>\n",
-        "finished": "\n<b>Exit code</b> <code>{}</code>",
+        "running": "<b>Execution:</b> <code>{}</code>\n",
+        "finished": "<b>With code:</b> <code>{}</code>",
         "stdout": "\n<pre><code class=\"language-stdout\">",
         "stderr": "</code></pre>\n<pre><code class=\"language-stderr\">",
         "end": "</code></pre>",
