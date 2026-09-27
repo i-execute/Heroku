@@ -11,7 +11,9 @@ import logging
 from collections.abc import Callable
 import re
 import sys
+import time
 import traceback
+import typing
 
 from telethon import events
 from telethon.errors import FloodWaitError, RPCError
@@ -20,6 +22,7 @@ from telethon.tl.types import Message
 from . import main, security, utils
 from ._internal import tag_client_id
 from .database import Database
+from .lifecycle import LifecycleManager
 from .loader import Modules
 from .tl_cache import CustomTelegramClient
 
@@ -31,6 +34,13 @@ _LAYOUT_TRANSLATION = str.maketrans(
     "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~@#$%^&QWERTYUIOP{}ASDFGHJKL:\"|ZXCVBNM<>?"
     + 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,',
 )
+
+#: Commands, which are still accepted while the userbot is disabled.
+#: Everything else is dead until `.enable` is called.
+DORMANT_COMMANDS = frozenset({"enable"})
+
+#: For how long a message, consumed by the dormant watcher, is remembered
+DORMANT_CONSUMED_TTL = 10.0
 
 ALL_TAGS = [
     "no_commands",
@@ -101,6 +111,11 @@ class CommandDispatcher:
 
         self.security = security.SecurityManager(client, db)
 
+        self.lifecycle: LifecycleManager = getattr(
+            client, "lifecycle", None
+        ) or LifecycleManager(client, db)
+        client.lifecycle = self.lifecycle
+
         self.check_security = self.security.check
         self._me = self._client.heroku_me.id
         self._cached_usernames = set()
@@ -117,6 +132,267 @@ class CommandDispatcher:
         self._cached_usernames.add(str(self._client.heroku_me.id))
 
         self.raw_handlers = []
+
+        # Everything, which is spawned by the dispatcher, is tracked here,
+        # so `.disable` can cancel it in one go
+        self._pending_tasks: set[asyncio.Task] = set()
+
+        # Handlers, detached by `.disable`, to be restored by `.enable`
+        self._saved_handlers: list[tuple[Callable, typing.Any]] = []
+        self._dormant_handler: tuple[Callable, typing.Any] | None = None
+
+        # Messages, already consumed by the dormant watcher. Telethon
+        # iterates over the (live) list of handlers, so without this the
+        # very same `.enable` message would be dispatched once again by
+        # the handlers we restore in the middle of the dispatch loop
+        self._consumed_messages: collections.deque = collections.deque(maxlen=64)
+
+    # ------------------------------------------------------------------ #
+    # Event handlers bookkeeping (see `heroku.lifecycle`)                 #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def pending_tasks(self) -> set[asyncio.Task]:
+        """Commands and watchers, which are being executed right now"""
+        return self._pending_tasks
+
+    @property
+    def dormant(self) -> bool:
+        """Whether only the `.enable` watcher is attached to the client"""
+        return self._dormant_handler is not None
+
+    def _default_handlers(self) -> list[tuple[Callable, typing.Any]]:
+        return [
+            (self.handle_incoming, events.NewMessage()),
+            (self.handle_incoming, events.ChatAction()),
+            (self.handle_command, events.NewMessage(forwards=False)),
+            (self.handle_command, events.MessageEdited()),
+            (self.handle_raw, events.Raw()),
+        ]
+
+    @staticmethod
+    def _message_key(message: Message) -> tuple[int, int]:
+        try:
+            chat_id = utils.get_chat_id(message)
+        except Exception:
+            chat_id = getattr(message, "chat_id", 0) or 0
+
+        return (chat_id, getattr(message, "id", 0) or 0)
+
+    def _consume_message(self, message: Message):
+        """Mark the message as handled by the dormant watcher"""
+        self._consumed_messages.append((self._message_key(message), time.time()))
+
+    def _is_consumed(self, message: Message) -> bool:
+        if not self._consumed_messages:
+            return False
+
+        key = self._message_key(message)
+        now = time.time()
+
+        return any(
+            consumed == key and now - timestamp < DORMANT_CONSUMED_TTL
+            for consumed, timestamp in self._consumed_messages
+        )
+
+    def _track(self, task: asyncio.Task) -> asyncio.Task:
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
+        return task
+
+    def attach_handlers(self):
+        """
+        Attach event handlers to the client.
+
+        If the userbot was disabled before the (re)start, only the single
+        `.enable` watcher is attached - the userbot stays dead until the
+        owner revives it.
+        """
+        if self.lifecycle.disabled:
+            self.enter_dormant()
+            return
+
+        for callback, builder in self._default_handlers():
+            self._client.add_event_handler(callback, builder)
+
+    def enter_dormant(self) -> int:
+        """
+        Detach every handler of the userbot and attach the only one, which
+        survives `.disable` - the `.enable` watcher.
+
+        :return: amount of detached handlers
+        """
+        if self.dormant:
+            return 0
+
+        saved = [
+            (callback, builder)
+            for callback, builder in self._client.list_event_handlers()
+        ]
+
+        for callback in {callback for callback, _ in saved}:
+            with contextlib.suppress(Exception):
+                self._client.remove_event_handler(callback)
+
+        self._saved_handlers = saved
+
+        builder = events.NewMessage()
+        self._client.add_event_handler(self.handle_dormant, builder)
+        self._dormant_handler = (self.handle_dormant, builder)
+
+        logger.debug(
+            "Dispatcher is dormant now: %s handlers detached, watching for"
+            " `enable` only",
+            len(saved),
+        )
+
+        return len(saved)
+
+    def leave_dormant(self) -> int:
+        """
+        Restore everything, which was detached by :meth:`enter_dormant`.
+
+        :return: amount of restored handlers
+        """
+        if self._dormant_handler:
+            callback, _ = self._dormant_handler
+            with contextlib.suppress(Exception):
+                self._client.remove_event_handler(callback)
+
+            self._dormant_handler = None
+
+        restored = self._saved_handlers or self._default_handlers()
+        self._saved_handlers = []
+
+        for callback, builder in restored:
+            self._client.add_event_handler(callback, builder)
+
+        logger.debug("Dispatcher is alive again: %s handlers restored", len(restored))
+
+        return len(restored)
+
+    def _resolve_prefix(self, initiator: int) -> str:
+        main_prefix = self._db.get(main.__name__, "command_prefix", ".")
+
+        if initiator == self._client.tg_id:
+            return main_prefix
+
+        return self._db.get(main.__name__, "command_prefixes", {}).get(
+            str(initiator),
+            main_prefix,
+        )
+
+    def _dormant_command_names(self) -> set[str]:
+        names = set(DORMANT_COMMANDS)
+
+        aliases = getattr(self._modules, "aliases", None) or {}
+        with contextlib.suppress(Exception):
+            names |= {
+                alias.lower()
+                for alias, command in aliases.items()
+                if command.split(maxsplit=1)[0].lower() in DORMANT_COMMANDS
+            }
+
+        return names
+
+    def _is_dormant_command(self, text: str, initiator: int) -> bool:
+        """Whether `text` is the `.enable` command (layout & aliases aware)"""
+        if not isinstance(text, str) or not text.strip():
+            return False
+
+        prefix = self._resolve_prefix(initiator)
+        allowed = self._dormant_command_names()
+
+        variants = {text}
+        with contextlib.suppress(Exception):
+            variants.add(str.translate(text, _LAYOUT_TRANSLATION))
+
+        for variant in variants:
+            variant = variant.strip()
+
+            if not prefix or not variant.startswith(prefix):
+                continue
+
+            body = variant[len(prefix) :].strip()
+            if not body:
+                continue
+
+            command = body.split(maxsplit=1)[0]
+            tag = command.split("@", maxsplit=1)
+
+            if (
+                len(tag) == 2
+                and tag[1].lower() != "me"
+                and tag[1].lower() not in self._cached_usernames
+            ):
+                continue
+
+            if tag[0].lower() in allowed:
+                return True
+
+        return False
+
+    @tag_client_id("client.tg_id")
+    async def handle_dormant(self, event: events.NewMessage):
+        """
+        The one and only handler, which survives `.disable`.
+
+        Listens for `.enable` from the owner or from any member of the
+        `owner` security group and brings the userbot back to life.
+        """
+        if not self.lifecycle.disabled:
+            return
+
+        message = getattr(event, "message", None)
+        if message is None or not isinstance(getattr(message, "message", None), str):
+            return
+
+        initiator = (
+            self._client.tg_id
+            if getattr(message, "out", False)
+            else (getattr(event, "sender_id", 0) or getattr(message, "sender_id", 0))
+        )
+
+        if not self.lifecycle.is_trusted(initiator):
+            return
+
+        if not self._is_dormant_command(message.message, initiator):
+            return
+
+        if self._is_consumed(message):
+            return
+
+        self._consume_message(message)
+
+        logger.info("Got `enable` from %s while dormant", initiator)
+
+        try:
+            report = await self.lifecycle.enable(initiator=initiator)
+        except Exception:
+            logger.exception("Failed to enable userbot")
+            with contextlib.suppress(Exception):
+                await utils.answer(
+                    message,
+                    self.lifecycle.string(
+                        "enable_failed",
+                        "<b>Failed to enable userbot. Check logs.</b>",
+                    ),
+                )
+            return
+
+        with contextlib.suppress(Exception):
+            await utils.answer(
+                message,
+                self.lifecycle.string(
+                    "enabled",
+                    "<b>Userbot enabled.</b>",
+                    **report.as_dict,
+                ),
+            )
+
+        # The list of handlers is mutated in the middle of telethon's
+        # dispatch loop, so stop it right here to avoid double handling
+        raise events.StopPropagation
 
     async def _handle_ratelimit(self, message: Message, func: Callable) -> bool:
         if await self.security.check(message, security.OWNER):
@@ -258,9 +534,18 @@ class CommandDispatcher:
 
         initiator = getattr(event, "sender_id", 0)
 
-        if self._db.get(main.__name__, "heroku_disabled", False):
-            if initiator not in self.security.owner + [self._client.tg_id]:
+        if self.lifecycle.disabled:
+            # Safety net: even if some handler survived `.disable`, the only
+            # thing it may process is `.enable` from the owner or from the
+            # `owner` security group
+            if not self.lifecycle.is_trusted(initiator) or not self._is_dormant_command(
+                event.message.message,
+                initiator,
+            ):
                 return False
+
+        if self._is_consumed(event.message):
+            return False
 
         main_prefix = self._db.get(main.__name__, "command_prefix", ".")
         if initiator == self._client.tg_id:
@@ -420,7 +705,7 @@ class CommandDispatcher:
         return message, prefix, txt, func
 
     async def handle_raw(self, event: events.Raw):
-        if self._db.get(main.__name__, "heroku_disabled", False):
+        if self.lifecycle.disabled:
             return
 
         for handler in self.raw_handlers:
@@ -440,11 +725,13 @@ class CommandDispatcher:
 
         message, _, _, func = message
 
-        asyncio.ensure_future(
-            self.future_dispatcher(
-                func,
-                message,
-                self.command_exc,
+        self._track(
+            asyncio.ensure_future(
+                self.future_dispatcher(
+                    func,
+                    message,
+                    self.command_exc,
+                )
             )
         )
 
@@ -610,7 +897,7 @@ class CommandDispatcher:
         event: events.NewMessage | events.MessageDeleted,
     ):
 
-        if self._db.get(main.__name__, "heroku_disabled", False):
+        if self.lifecycle.disabled:
             return
         message = utils.censor(getattr(event, "message", event))
 
@@ -658,11 +945,13 @@ class CommandDispatcher:
                 except UnicodeDecodeError:
                     pass
 
-            asyncio.ensure_future(
-                self.future_dispatcher(
-                    func,
-                    message,
-                    self.watcher_exc,
+            self._track(
+                asyncio.ensure_future(
+                    self.future_dispatcher(
+                        func,
+                        message,
+                        self.watcher_exc,
+                    )
                 )
             )
 

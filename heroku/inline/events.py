@@ -19,11 +19,29 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class Events(InlineUnit):
+    def _dormant_block(self: "InlineManager", user_id: int | None = None) -> bool:
+        """
+        Whether this update must be dropped because of `.disable`.
+
+        The inline bot is detached from its handlers by the kill switch,
+        so normally we never even get here - this is a safety net for
+        updates, which were already in flight when `.disable` was called.
+        """
+        lifecycle = getattr(self._client, "lifecycle", None)
+
+        if lifecycle is None:
+            return bool(self._db.get(main.__name__, "heroku_disabled", False))
+
+        if not lifecycle.disabled:
+            return False
+
+        return user_id is None or not lifecycle.is_trusted(user_id)
+
     async def _message_handler(self: "InlineManager", message):
         if not message.is_private:
             return
 
-        if self._db.get(main.__name__, "heroku_disabled", False):
+        if self._dormant_block():
             return
 
         wrapped_message = self._bot_message(message)
@@ -52,12 +70,8 @@ class Events(InlineUnit):
         wrapped_query = InlineQuery(inline_query=inline_query)
         inline_query.inline_manager = self
 
-        if self._db.get(main.__name__, "heroku_disabled", False):
-            if (
-                wrapped_query.from_user.id
-                not in self._client.dispatcher.security.owner + [self._client.tg_id]
-            ):
-                return
+        if self._dormant_block(wrapped_query.from_user.id):
+            return
         if (
             not self._db.get(security.__name__, "allow_inline_query", False)
             and wrapped_query.from_user.id
@@ -208,9 +222,8 @@ class Events(InlineUnit):
         )
         user_id = call.sender_id
 
-        if self._db.get(main.__name__, "heroku_disabled", False):
-            if user_id not in self._client.dispatcher.security.owner + [self._client.tg_id]:
-                return
+        if self._dormant_block(user_id):
+            return
 
         for func in self._allmodules.callback_handlers.values():
             if await self.check_inline_security(func=func, user=user_id):
@@ -334,12 +347,8 @@ class Events(InlineUnit):
         if not isinstance(chosen_inline_query, UpdateBotInlineSend):
             return
 
-        if self._db.get(main.__name__, "heroku_disabled", False):
-            if (
-                chosen_inline_query.user_id
-                not in self._client.dispatcher.security.owner + [self._client.tg_id]
-            ):
-                return
+        if self._dormant_block(chosen_inline_query.user_id):
+            return
 
         query = chosen_inline_query.query
 

@@ -228,7 +228,13 @@ class InfiniteLoop:
         self._task = None
 
     def __del__(self):
-        self.stop()
+        # May be called after the event loop is closed (interpreter
+        # shutdown), so it must never raise
+        if self._task is None:
+            return
+
+        with contextlib.suppress(Exception):
+            self.stop()
 
 def loop(
     interval: int = 5,
@@ -242,6 +248,11 @@ def loop(
     return wrapped
 
 MODULES_NAME = "Modules"
+
+#: Attribute of a module, which holds the last delivered lifecycle signal
+#: (`enabled` / `disabled`). See `Modules.fire_lifecycle_hook`
+LIFECYCLE_STATE_ATTR = "__heroku_lifecycle_state__"
+
 ru_keys = 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,'
 en_keys = "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~@#$%^&QWERTYUIOP{}ASDFGHJKL:\"|ZXCVBNM<>?"
 
@@ -981,13 +992,13 @@ class Modules:
             self.modules.remove(mod)
             raise
 
+        userbot_disabled = self._db.get(main.__name__, "heroku_disabled", False)
+
         for _, method in utils.iter_attrs(mod):
             if isinstance(method, InfiniteLoop):
                 setattr(method, "module_instance", mod)
 
-                if method.autostart and not self._db.get(
-                    main.__name__, "heroku_disabled", False
-                ):
+                if method.autostart and not userbot_disabled:
                     method.start()
 
                 logger.debug("Added module %s to method %s", mod, method)
@@ -1000,6 +1011,102 @@ class Modules:
         self.register_watchers(mod)
         self.register_raw_handlers(mod)
         self.register_bot_update_handlers(mod)
+
+        if userbot_disabled:
+            # Userbot is dormant (`.disable`), so the module must know it
+            # right after `client_ready`, just like it would be notified
+            # if `.disable` was called while it was running
+            await self.fire_lifecycle_hook("on_disable", only=mod)
+
+    @staticmethod
+    def _overrides_lifecycle_hook(mod: typing.Any, hook: str) -> bool:
+        """Whether `mod` actually implements the `hook`, not just inherits it"""
+        own = getattr(type(mod), hook, None)
+        return own is not None and own is not getattr(Module, hook, None)
+
+    async def _fire_lifecycle_hook_one(
+        self,
+        name: str,
+        func: typing.Callable,
+        hook: str,
+        timeout: float,
+    ):
+        try:
+            coro = (
+                func(self.client, self._db)
+                if len(inspect.signature(func).parameters) == 2
+                else func()
+            )
+
+            await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Hook `%s` of %s took more than %s seconds, moving on",
+                hook,
+                name,
+                timeout,
+            )
+        except Exception:
+            logger.exception("Can't process `%s` hook of %s", hook, name)
+
+    @tag_client_id("client.tg_id")
+    async def fire_lifecycle_hook(
+        self,
+        hook: str,
+        *,
+        only: Module | None = None,
+        timeout: float = 15.0,
+    ) -> list[str]:
+        """
+        Broadcast the `on_disable` / `on_enable` signal to modules & libraries.
+
+        Works just like `client_ready`: a hook may be declared either as
+        `async def on_disable(self)` or as `async def on_disable(self, client, db)`.
+
+        Signals are idempotent - a module never gets `on_disable` twice in
+        a row, and `on_enable` is only delivered to modules, which were
+        actually put to sleep.
+
+        :param hook: `on_disable` or `on_enable`
+        :param only: notify a single module instead of all of them
+        :param timeout: max amount of seconds for one hook to complete
+        :return: names of the notified modules
+        """
+        if hook not in {"on_disable", "on_enable"}:
+            raise ValueError(f"Unknown lifecycle hook: {hook}")
+
+        state = "disabled" if hook == "on_disable" else "enabled"
+        targets = (
+            [only] if only is not None else [*self.modules, *self.libraries]
+        )
+
+        notified = []
+        coros = []
+
+        for mod in targets:
+            if mod is None:
+                continue
+
+            if getattr(mod, LIFECYCLE_STATE_ATTR, "enabled") == state:
+                continue
+
+            setattr(mod, LIFECYCLE_STATE_ATTR, state)
+
+            func = getattr(mod, hook, None)
+            if not callable(func) or not self._overrides_lifecycle_hook(mod, hook):
+                continue
+
+            name = getattr(mod, "name", None) or mod.__class__.__name__
+            notified.append(name)
+            coros.append(self._fire_lifecycle_hook_one(name, func, hook, timeout))
+
+        if coros:
+            await asyncio.gather(*coros, return_exceptions=True)
+
+        if notified:
+            logger.debug("Sent `%s` to %s", hook, ", ".join(notified))
+
+        return notified
 
     def get_classname(self, name: str) -> str:
         return next(

@@ -254,7 +254,7 @@ class Executor(loader.Module):
         "stdout": "\n<pre><code class=\"language-stdout\">",
         "stderr": "</code></pre>\n<pre><code class=\"language-stderr\">",
         "end": "</code></pre>",
-        "time_exec": "\n<b>Time:</b> <code>{}s</code>",
+        "time_exec": "<b>Time:</b> <code>{}s</code>",
         "err": (
             "<b>Error</b>\n"
             "<blockquote>{}</blockquote>"

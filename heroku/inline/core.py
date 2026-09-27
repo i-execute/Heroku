@@ -4,6 +4,7 @@
 # (c) Dan Gazizullin, 2021-2023. This file is part of the Hikka Userbot: github.com/hikariatama/Hikka
 
 import asyncio
+import contextlib
 import logging
 import os
 import sqlite3
@@ -159,6 +160,62 @@ class InlineManager(
 
         self._bot_update_handlers: dict[str, tuple[str, typing.Callable]] = {}
         self._bot_handler_refs: dict[str, tuple[typing.Callable, object]] = {}
+
+        #: Set by `.disable` - the bot is connected, but processes nothing
+        self._suspended: bool = False
+
+    @property
+    def suspended(self) -> bool:
+        """Whether the inline bot is frozen by `.disable`"""
+        return self._suspended
+
+    async def suspend(self) -> bool:
+        """
+        Detach every handler of the inline bot and stop its background
+        tasks. Called by `.disable` - the bot stays online (so `.enable`
+        can restore it instantly), but reacts to absolutely nothing.
+        """
+        if self._suspended:
+            return False
+
+        self._suspended = True
+
+        if self._cleaner_task:
+            self._cleaner_task.cancel()
+            self._cleaner_task = None
+
+        if not self._bot_client:
+            return True
+
+        for callback in {
+            callback for callback, _ in self._bot_client.list_event_handlers()
+        }:
+            with contextlib.suppress(Exception):
+                self._bot_client.remove_event_handler(callback)
+
+        self._bot_handler_refs.clear()
+        logger.debug("Inline bot is suspended")
+
+        return True
+
+    async def resume(self) -> bool:
+        """Undo :meth:`suspend` - called by `.enable`"""
+        if not self._suspended:
+            return False
+
+        self._suspended = False
+
+        if not self._bot_client or not self.init_complete:
+            return True
+
+        self._register_builtin_handlers()
+
+        if not self._cleaner_task or self._cleaner_task.done():
+            self._cleaner_task = asyncio.ensure_future(self._cleaner())
+
+        logger.debug("Inline bot is resumed")
+
+        return True
 
     async def _cleaner(self):
         while True:
@@ -332,6 +389,12 @@ class InlineManager(
                 break
 
         self._cleaner_task = asyncio.ensure_future(self._cleaner())
+
+        if self._db.get(main.__name__, "heroku_disabled", False):
+            # Booted (or re-registered) while the userbot is dormant:
+            # the bot must not process anything until `.enable`
+            self._suspended = False
+            await self.suspend()
 
     async def _ping_bot(
         self,

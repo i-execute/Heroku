@@ -4,7 +4,6 @@
 # (c) Dan Gazizullin, 2021-2023. This file is part of the Hikka Userbot: github.com/hikariatama/Hikka
 
 import asyncio
-import inspect
 import json
 import logging
 import os
@@ -21,9 +20,10 @@ from telethon.tl.types import (
     Message,
 )
 
-from .. import loader, main, utils
+from .. import loader, utils
 from .._internal import restart
 from ..inline.types import InlineCall
+from ..lifecycle import LifecycleManager
 
 logger = logging.getLogger(__name__)
 NO_GIT = os.environ.get("HEROKU_NO_GIT") == "1"
@@ -43,9 +43,35 @@ class Updater(loader.Module):
         "cancel": "Cancel",
         "_cmd_doc_restart": "Restarts the userbot",
         "_cmd_doc_update": "Downloads userbot updates",
+        "_cmd_doc_disable": "Hard-off the userbot: kills loops, tasks, handlers and child processes, leaving only the <code>.enable</code> watcher",
+        "_cmd_doc_enable": "Revives the userbot after <code>.disable</code>",
         "_cls_doc": "Updates itself, tracks latest Heroku releases, and notifies you, if update is required",
-        "disabled": "<b>Userbot disabled.</b> Only <code>.enable</code> from the owner works now.",
-        "enabled": "<b>Userbot enabled.</b>",
+        "disabling": "<b>Disabling userbot...</b>",
+        "disabled": (
+            "<b>Userbot disabled.</b>\n\n"
+            "<blockquote expandable>"
+            "<b>Handlers detached:</b> <code>{handlers}</code>\n"
+            "<b>Loops stopped:</b> <code>{loops}</code>\n"
+            "<b>Tasks cancelled:</b> <code>{tasks}</code>\n"
+            "<b>Child processes killed:</b> <code>{children}</code>\n"
+            "<b>Modules notified:</b> <code>{modules}</code>\n"
+            "<b>Inline bot frozen:</b> <code>{inline}</code>"
+            "</blockquote>\n\n"
+            "<b>Only</b> <code>{prefix}enable</code> <b>from you or from the</b>"
+            " <code>owner</code> <b>group works now. The state survives"
+            " restarts.</b>"
+        ),
+        "enabled": (
+            "<b>Userbot enabled.</b>\n\n"
+            "<blockquote expandable>"
+            "<b>Handlers restored:</b> <code>{handlers}</code>\n"
+            "<b>Loops started:</b> <code>{loops}</code>\n"
+            "<b>Modules notified:</b> <code>{modules}</code>\n"
+            "<b>Inline bot restored:</b> <code>{inline}</code>"
+            "</blockquote>"
+        ),
+        "enable_failed": "<b>Failed to enable userbot. Check logs.</b>",
+        "already_disabled": "<b>Userbot is already disabled.</b> Send <code>{prefix}enable</code> to revive it.",
         "not_disabled": "<b>Userbot is not disabled.</b>",
         "restart_confirm": "<b>Are you sure you want to restart?</b>",
         "secure_boot_confirm": "<b>Are you sure you want to restart in secure boot mode?</b>",
@@ -98,76 +124,68 @@ class Updater(loader.Module):
     async def inline_restart(self, call: InlineCall, secure_boot: bool = False):
         await self.restart_common(call, secure_boot=secure_boot)
 
-    async def _kill_children(self):
-        import psutil
+    @property
+    def _lifecycle(self) -> LifecycleManager:
+        """Core kill switch (`heroku.lifecycle`)"""
+        return self._client.lifecycle
 
-        proc = psutil.Process()
-        for child in proc.children(recursive=True):
-            try:
-                child.kill()
-            except psutil.Error:
-                pass
-
-    def _live_loops(self) -> list:
-        return [
-            method
-            for mod in self.allmodules.modules
-            for _, method in utils.iter_attrs(mod)
-            if isinstance(method, loader.InfiniteLoop) and method._task
-        ]
-
-    async def _fire_hooks(self, hook: str):
-        await asyncio.gather(
-            *[
-                func(self.client, self._db)
-                if len(inspect.signature(func).parameters) == 2
-                else func()
-                for mod in self.allmodules.modules
-                if (func := getattr(mod, hook, None)) is not None
-            ],
-            return_exceptions=True,
+    @staticmethod
+    def _initiator(message: Message) -> int:
+        return int(
+            getattr(message, "sender_id", 0)
+            or getattr(getattr(message, "from_id", None), "user_id", 0)
+            or 0
         )
 
+    def _format(self, key: str, report=None) -> str:
+        text = self.strings[key]
+        placeholders = {
+            "prefix": utils.escape_html(self.get_prefix()),
+            **(report.as_dict if report is not None else {}),
+        }
+
+        try:
+            return text.format(**placeholders)
+        except Exception:
+            # Custom (user-edited) string with unknown placeholders
+            return text
+
+    @loader.owner
     @loader.command()
     async def disable(self, message: Message):
-        """Kill everything except the watcher for .enable"""
-        live = self._live_loops()
+        """Hard-off the userbot. Only .enable from the owner will work after it"""
+        if self._lifecycle.disabled:
+            await utils.answer(message, self._format("already_disabled"))
+            return
 
-        self._db.set(main.__name__, "heroku_disabled", True)
-        self._db.set(
-            "heroku.disabled_loops",
-            "modules",
-            sorted({m.module_instance.__class__.__name__ for m in live}),
-        )
+        # `utils.answer` may return a message, sent by us, so the real
+        # initiator has to be resolved beforehand
+        initiator = self._initiator(message)
+        message = await utils.answer(message, self.strings["disabling"])
 
-        await utils.answer(message, self.strings["disabled"])
+        report = await self._lifecycle.disable(initiator=initiator)
 
-        await self._fire_hooks("on_disable")
+        if not report.changed:
+            await utils.answer(message, self._format("already_disabled"))
+            return
 
-        for loop in live:
-            loop.stop()
+        await utils.answer(message, self._format("disabled", report))
 
-        await self._kill_children()
-
+    @loader.owner
     @loader.command()
     async def enable(self, message: Message):
-        """Restore userbot after .disable"""
-        if not self._db.get(main.__name__, "heroku_disabled", False):
-            return await utils.answer(message, self.strings["not_disabled"])
+        """Revive the userbot after .disable"""
+        if not self._lifecycle.disabled:
+            await utils.answer(message, self._format("not_disabled"))
+            return
 
-        self._db.set(main.__name__, "heroku_disabled", False)
+        report = await self._lifecycle.enable(initiator=self._initiator(message))
 
-        saved = self._db.get("heroku.disabled_loops", "modules", [])
-        for mod in self.allmodules.modules:
-            if mod.__class__.__name__ not in saved:
-                continue
-            for _, method in utils.iter_attrs(mod):
-                if isinstance(method, loader.InfiniteLoop):
-                    if not method._task or method._task.done():
-                        method.start()
+        if not report.changed:
+            await utils.answer(message, self._format("not_disabled"))
+            return
 
-        await self._fire_hooks("on_enable")
-        await utils.answer(message, self.strings["enabled"])
+        await utils.answer(message, self._format("enabled", report))
 
 
     @staticmethod

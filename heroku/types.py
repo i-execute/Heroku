@@ -89,11 +89,33 @@ class Module:
     def config_complete(self):
         pass
     async def client_ready(self):
-        pass
+        """Called when the module is fully loaded and the client is ready"""
     async def on_disable(self):
-        pass
+        """
+        Called when the userbot is being put to sleep with `.disable`.
+
+        Works exactly like `client_ready`: may be declared either as
+        `async def on_disable(self)` or `async def on_disable(self, client, db)`.
+
+        This is the last moment when the module is fully functional, so
+        it is the right place to stop custom tasks, close sessions, log
+        out from third-party services, etc. Right after this hook the
+        core stops every loop, cancels every task of the module, kills
+        every child process and detaches every handler.
+
+        The hook is also fired right after `client_ready` if the userbot
+        is booted while being disabled, and it is never fired twice in a
+        row for the same module.
+        """
     async def on_enable(self):
-        pass
+        """
+        Called when the userbot is revived with `.enable`.
+
+        Counterpart of `on_disable`: loops are already restarted and
+        handlers are already attached back by the time it is called.
+        May be declared as `async def on_enable(self)` or
+        `async def on_enable(self, client, db)`.
+        """
     def internal_init(self):
         self.allmodules: "Modules"
 
@@ -105,6 +127,7 @@ class Module:
         self.get_prefix = self.allmodules.get_prefix
         self.get_prefixes = self.allmodules.get_prefixes
         self.inline = self.allmodules.inline
+        self.lifecycle = getattr(self._client, "lifecycle", None)
         self.tg_id: int = self._client.tg_id
         self._tg_id: int = self._client.tg_id
 
