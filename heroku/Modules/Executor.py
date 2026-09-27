@@ -408,7 +408,7 @@ class Executor(loader.Module):
             self._shell_sessions[uid] = session
         return self._shell_sessions[uid]
 
-    @loader.command(alias="terminal")
+    @loader.command()
     async def exec(self, message: Message):
         """Run a shell command"""
         cmd = utils.get_args_raw(message)
