@@ -89,8 +89,17 @@ class Module:
     def config_complete(self):
         pass
     async def client_ready(self):
+
+        pass
+
     async def on_disable(self):
+
+        pass
+
     async def on_enable(self):
+
+        pass
+
     def internal_init(self):
         self.allmodules: "Modules"
 
@@ -283,7 +292,7 @@ class Library:
         self.inline = self.allmodules.inline
 
 class LoadError(Exception):
-    def __init__(self, error_message: str):                     
+    def __init__(self, error_message: str):
         self._error = error_message
 
     def __str__(self) -> str:
@@ -571,7 +580,7 @@ def _get_members(
 class CacheRecordEntity:
     def __init__(
         self,
-        hashable_entity: "Hashable",                              
+        hashable_entity: "Hashable",
         resolved_entity: EntityLike,
         exp: int,
     ):
@@ -602,8 +611,8 @@ class CacheRecordEntity:
 class CacheRecordPerms:
     def __init__(
         self,
-        hashable_entity: "Hashable",                              
-        hashable_user: "Hashable",                              
+        hashable_entity: "Hashable",
+        hashable_user: "Hashable",
         resolved_perms: EntityLike,
         exp: int,
     ):

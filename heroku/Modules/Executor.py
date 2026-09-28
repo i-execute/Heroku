@@ -612,6 +612,7 @@ class Executor(loader.Module):
 
     @loader.callback_handler()
     async def executor_callback(self, call):
+        """Handle executor inline callbacks"""
         data = call.data
 
         if data.startswith("executor/exec/"):
@@ -686,6 +687,7 @@ class Executor(loader.Module):
             return
 
     async def inline__continue_input(self, call, query: str, uid: str):
+        """Continue shell session with next command"""
         editor = self._shell_editors.get(uid)
         if not editor:
             return

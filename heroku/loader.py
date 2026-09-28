@@ -145,7 +145,7 @@ builtins.__import__ = patched_import
 class InfiniteLoop:
     _task = None
     status = False
-    module_instance = None                        
+    module_instance = None
 
     def __init__(
         self,
@@ -228,6 +228,8 @@ class InfiniteLoop:
         self._task = None
 
     def __del__(self):
+
+
         if self._task is None:
             return
 
@@ -247,6 +249,8 @@ def loop(
 
 MODULES_NAME = "Modules"
 
+
+
 LIFECYCLE_STATE_ATTR = "__heroku_lifecycle_state__"
 
 ru_keys = 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,'
@@ -264,6 +268,7 @@ MODULES_PATH.mkdir(parents=True, exist_ok=True)
 
 
 def module_class_name(source: str | bytes) -> str | None:
+
     if isinstance(source, bytes):
         try:
             source = source.decode("utf-8")
@@ -291,6 +296,7 @@ def module_class_name(source: str | bytes) -> str | None:
 
 
 def save_module_source(source: str | bytes, class_name: str | None = None) -> Path:
+
     class_name = class_name or module_class_name(source)
     if not class_name or not class_name.isidentifier():
         raise ValueError("Module class name could not be determined")
@@ -371,7 +377,7 @@ def translatable_docstring(cls):
 
     return cls
 
-tds = translatable_docstring                                   
+tds = translatable_docstring
 
 def ratelimit(func: Command) -> Command:
     func.ratelimit = True
@@ -446,7 +452,7 @@ class Modules:
         self.inline_handlers = {}
         self.callback_handlers = {}
         self.aliases = {}
-        self.modules: list["Module" | None] = []                     
+        self.modules: list["Module" | None] = []
         self.libraries = []
         self.watchers = []
         self._log_handlers = []
@@ -1049,10 +1055,14 @@ class Modules:
         self.register_bot_update_handlers(mod)
 
         if userbot_disabled:
+
+
+
             await self.fire_lifecycle_hook("on_disable", only=mod)
 
     @staticmethod
     def _overrides_lifecycle_hook(mod: typing.Any, hook: str) -> bool:
+
         own = getattr(type(mod), hook, None)
         return own is not None and own is not getattr(Module, hook, None)
 
@@ -1089,6 +1099,7 @@ class Modules:
         only: Module | None = None,
         timeout: float = 15.0,
     ) -> list[str]:
+
         if hook not in {"on_disable", "on_enable"}:
             raise ValueError(f"Unknown lifecycle hook: {hook}")
 

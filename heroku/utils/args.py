@@ -41,7 +41,7 @@ def get_args(message: Message | str) -> list[str]:
     try:
         split = shlex.split(message)
     except ValueError:
-        return message                                                              
+        return message
 
     return list(filter(lambda x: len(x) > 0, split))
 

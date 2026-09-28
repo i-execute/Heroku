@@ -1,6 +1,9 @@
 # CopyLeft 2026 github.com/i-execute // i_execute.t.me
 # Licensed under AGPLv3.
 
+
+
+
 import logging
 import typing
 
@@ -16,6 +19,7 @@ def fmt(text: str, kwargs: dict) -> str:
 
 
 class Strings:
+
 
     def __init__(self, mod: typing.Any, translator: typing.Any = None):
         self._base_strings = mod.strings if isinstance(mod.strings, dict) else {}

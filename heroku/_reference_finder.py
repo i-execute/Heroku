@@ -44,7 +44,7 @@ def replace_all_refs(replace_from: typing.Any, replace_to: typing.Any) -> typing
                         hit = True
                         value = replace_to
                         referrer[key] = value
-                        if cls:                                    
+                        if cls:
                             setattr(cls, key, replace_to)
 
                     if key is replace_from:

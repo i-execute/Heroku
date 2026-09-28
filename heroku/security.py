@@ -416,7 +416,7 @@ class SecurityManager:
         if user_id in self._db._get_raw(main.__name__, "blacklist_users", []):
             return False
 
-        if message is None:                                                 
+        if message is None:
             return self._check_tsec_inline(user_id, inline_cmd) or bool(
                 config & EVERYONE
             )
@@ -593,4 +593,4 @@ class SecurityManager:
 
         return False
 
-    _check = check          
+    _check = check

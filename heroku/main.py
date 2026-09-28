@@ -464,17 +464,20 @@ class Heroku:
 
     async def _initial_setup(self) -> bool:
         if get_config_key("owner_id"):
+
             from .qr_recovery import send_qr_recovery
 
             if await send_qr_recovery(
                 int(self.api_token.ID), self.api_token.HASH
             ):
+
                 restart()
                 return True
 
         from .qr_recovery import run_bot_setup
 
         if await run_bot_setup():
+
             restart()
             return True
 
@@ -642,6 +645,9 @@ class Heroku:
         dispatcher = CommandDispatcher(modules, client, db)
         client.dispatcher = dispatcher
         modules.check_security = dispatcher.check_security
+
+
+
         dispatcher.attach_handlers()
 
     async def amain(self, first: bool, client: CustomTelegramClient):
@@ -664,6 +670,9 @@ class Heroku:
         await modules.inline.register_manager()
         await db.ensure_content_channel()
         await modules.send_ready()
+
+
+
         dormant = await client.lifecycle.apply_startup_state()
 
         if first and not dormant:

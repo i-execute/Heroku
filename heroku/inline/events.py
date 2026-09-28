@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class Events(InlineUnit):
     def _dormant_block(self: "InlineManager", user_id: int | None = None) -> bool:
+
         lifecycle = getattr(self._client, "lifecycle", None)
 
         if lifecycle is None:
@@ -394,6 +395,10 @@ class Events(InlineUnit):
                             *button.get("args", []),
                             **button.get("kwargs", {}),
                         )
+
+
+
+
                         try:
                             message_id = getattr(
                                 chosen_inline_query.msg_id,

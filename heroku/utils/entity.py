@@ -165,7 +165,7 @@ def remove_html(text: str, escape: bool = False, keep_emojis: bool = False) -> s
     )
 
 def normalize_git_url(url: str) -> str:
-    """github.com/owner/repo(/tree|blob)/branch -> raw.githubusercontent.com/owner/repo/branch"""
+
     if not url:
         return ""
     url = url.strip().rstrip("/")
@@ -507,7 +507,7 @@ async def get_target(message: Message, arg_no: int = 0) -> int | None:
 async def get_user(message: Message) -> User | None:
     try:
         return await message.get_sender()
-    except ValueError:                                              
+    except ValueError:
         logger.debug("User not in session cache. Searching...")
 
     if isinstance(message.peer_id, PeerUser):
@@ -537,7 +537,7 @@ def get_chat_id(message: Message) -> int:
 def get_entity_id(entity: hints.Entity) -> int:
     return telethon.utils.get_peer_id(entity)
 
-def escape_html(text: str, /) -> str:                 
+def escape_html(text: str, /) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 def escape_non_html(text: str) -> str:

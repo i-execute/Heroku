@@ -132,7 +132,7 @@ class InlineManager(
         self,
         client: CustomTelegramClient,
         db: Database,
-        allmodules: "Modules",                              
+        allmodules: "Modules",
     ):
         self._client = client
         self._db = db
@@ -160,13 +160,17 @@ class InlineManager(
 
         self._bot_update_handlers: dict[str, tuple[str, typing.Callable]] = {}
         self._bot_handler_refs: dict[str, tuple[typing.Callable, object]] = {}
+
+
         self._suspended: bool = False
 
     @property
     def suspended(self) -> bool:
+
         return self._suspended
 
     async def suspend(self) -> bool:
+
         if self._suspended:
             return False
 
@@ -191,6 +195,7 @@ class InlineManager(
         return True
 
     async def resume(self) -> bool:
+
         if not self._suspended:
             return False
 
@@ -382,6 +387,8 @@ class InlineManager(
         self._cleaner_task = asyncio.ensure_future(self._cleaner())
 
         if self._db.get(main.__name__, "heroku_disabled", False):
+
+
             self._suspended = False
             await self.suspend()
 
@@ -513,7 +520,7 @@ class InlineManager(
         event = asyncio.Event()
         self._error_events[unit_id] = event
 
-        q: "InlineResults" = None                              
+        q: "InlineResults" = None
         exception: Exception = None
 
         async def result_getter():
@@ -547,7 +554,7 @@ class InlineManager(
         self._error_events.pop(unit_id, None)
 
         if exception:
-            raise exception                     
+            raise exception
 
         if not q:
             raise Exception("No query results")

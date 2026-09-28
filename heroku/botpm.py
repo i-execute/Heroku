@@ -15,6 +15,7 @@ from .utils.other import rand as utils_rand
 
 class BotPM:
 
+
     def __init__(self, api_id: int, api_hash: str, token: str):
         self.token = token
         self.client = TelegramClient(
@@ -42,6 +43,7 @@ class BotPM:
             self._inbox.put_nowait(event.raw_text)
 
     async def _on_iq(self, event):
+
         state = self._ask_state
         if not state:
             return
@@ -70,6 +72,7 @@ class BotPM:
         )
 
     async def _on_inline_send(self, update):
+
         state = self._ask_state
         if not state:
             return
@@ -86,6 +89,7 @@ class BotPM:
         fut.set_result(parts[1].strip())
 
     def _bind_owner_id(self, expected_id: int | None) -> None:
+
         waiter = asyncio.get_running_loop().create_future()
 
         @self.client.on(events.NewMessage(pattern=r"^/start"))
@@ -101,6 +105,7 @@ class BotPM:
         self._waiter = waiter
 
     def start_echo(self):
+
         @self.client.on(events.NewMessage(pattern=r"^/start"))
         async def _echo(event):
             with contextlib.suppress(Exception):
@@ -114,6 +119,7 @@ class BotPM:
             self._echo_handler = None
 
     async def wait_start(self, expected_id: int | None = None) -> int:
+
         self._bind_owner_id(expected_id)
         return await self._waiter
 
@@ -125,6 +131,7 @@ class BotPM:
         )
 
     async def ask(self, prompt: str) -> str:
+
         token = utils_rand(10)
         await self.client.send_message(
             self.chat_id,
@@ -150,12 +157,14 @@ class BotPM:
         if self._qr_msg is None:
             self._qr_msg = msg
         else:
+
             with contextlib.suppress(Exception):
                 await self._qr_msg.delete()
             self._qr_msg = msg
         return msg
 
     async def edit_photo(self, png: bytes, caption: str):
+
         if self._qr_msg is None:
             return await self.send_photo(png, caption)
 
@@ -170,6 +179,8 @@ class BotPM:
                 file=InputMediaPhoto(uploaded),
             )
         except Exception:
+
+
             await self.send_photo(png, caption)
 
     async def close(self):

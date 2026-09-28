@@ -792,6 +792,7 @@ class RandomLink(Series):
         self.internal_id = "Series"
         self.doc = {
             "en": "A list of links, one of which will be chosen randomly",
+            "ru": "Список ссылок, одна из которых будет выбрана случайным образом",
         }
 
     @staticmethod

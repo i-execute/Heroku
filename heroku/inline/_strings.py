@@ -1,10 +1,13 @@
 # CopyLeft 2026 github.com/i-execute // i_execute.t.me
 # Licensed under AGPLv3.
 
+
+
 from __future__ import annotations
 
 
 class _ServiceStrings:
+
 
     _S = {
         "opening_form": "<b>Opening form...</b>",

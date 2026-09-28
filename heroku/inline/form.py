@@ -385,6 +385,8 @@ class Form(InlineUnit):
                     + self._client.dispatcher.security._owner
                     + unit.get("always_allow", [])
                 ):
+
+
                     parts = inline_query.query.split(maxsplit=1)
                     input_text = parts[1] if len(parts) > 1 else ""
                     arrow_idx = len(input_text) % len(arrows)

@@ -35,7 +35,10 @@ _LAYOUT_TRANSLATION = str.maketrans(
     + 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,',
 )
 
+
+
 DORMANT_COMMANDS = frozenset({"enable"})
+
 
 DORMANT_CONSUMED_TTL = 10.0
 
@@ -130,19 +133,32 @@ class CommandDispatcher:
 
         self.raw_handlers = []
 
+
+
         self._pending_tasks: set[asyncio.Task] = set()
+
 
         self._saved_handlers: list[tuple[Callable, typing.Any]] = []
         self._dormant_handler: tuple[Callable, typing.Any] | None = None
 
+
+
+
+
         self._consumed_messages: collections.deque = collections.deque(maxlen=64)
+
+
+
+
 
     @property
     def pending_tasks(self) -> set[asyncio.Task]:
+
         return self._pending_tasks
 
     @property
     def dormant(self) -> bool:
+
         return self._dormant_handler is not None
 
     def _default_handlers(self) -> list[tuple[Callable, typing.Any]]:
@@ -164,6 +180,7 @@ class CommandDispatcher:
         return (chat_id, getattr(message, "id", 0) or 0)
 
     def _consume_message(self, message: Message):
+
         self._consumed_messages.append((self._message_key(message), time.time()))
 
     def _is_consumed(self, message: Message) -> bool:
@@ -184,6 +201,7 @@ class CommandDispatcher:
         return task
 
     def attach_handlers(self):
+
         if self.lifecycle.disabled:
             self.enter_dormant()
             return
@@ -192,6 +210,7 @@ class CommandDispatcher:
             self._client.add_event_handler(callback, builder)
 
     def enter_dormant(self) -> int:
+
         if self.dormant:
             return 0
 
@@ -219,6 +238,7 @@ class CommandDispatcher:
         return len(saved)
 
     def leave_dormant(self) -> int:
+
         if self._dormant_handler:
             callback, _ = self._dormant_handler
             with contextlib.suppress(Exception):
@@ -261,6 +281,7 @@ class CommandDispatcher:
         return names
 
     def _is_dormant_command(self, text: str, initiator: int) -> bool:
+
         if not isinstance(text, str) or not text.strip():
             return False
 
@@ -298,6 +319,7 @@ class CommandDispatcher:
 
     @tag_client_id("client.tg_id")
     async def handle_dormant(self, event: events.NewMessage):
+
         if not self.lifecycle.disabled:
             return
 
@@ -347,6 +369,9 @@ class CommandDispatcher:
                     **report.as_dict,
                 ),
             )
+
+
+
         raise events.StopPropagation
 
     async def _handle_ratelimit(self, message: Message, func: Callable) -> bool:
@@ -490,6 +515,9 @@ class CommandDispatcher:
         initiator = getattr(event, "sender_id", 0)
 
         if self.lifecycle.disabled:
+
+
+
             if not self.lifecycle.is_trusted(initiator) or not self._is_dormant_command(
                 event.message.message,
                 initiator,
@@ -568,7 +596,7 @@ class CommandDispatcher:
             return False
 
         if not _msg or len(_msg.strip()) == len(prefix):
-            return False                              
+            return False
 
         _cmd = _msg[len(prefix) :]
         command = _cmd.strip().split(maxsplit=1)[0]

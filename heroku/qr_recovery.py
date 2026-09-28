@@ -38,6 +38,7 @@ async def _save_session(client, me) -> None:
 
 
 async def send_qr_recovery(api_id: int, api_hash: str) -> bool:
+
     from telethon import TelegramClient
     from telethon.errors import SessionPasswordNeededError
     from telethon.sessions import MemorySession
@@ -118,6 +119,7 @@ async def send_qr_recovery(api_id: int, api_hash: str) -> bool:
 
 
 async def run_bot_setup() -> bool:
+
     from telethon import TelegramClient
     from telethon.errors import SessionPasswordNeededError
     from telethon.sessions import MemorySession

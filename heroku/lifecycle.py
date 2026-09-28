@@ -1,6 +1,8 @@
 # CopyLeft 2026 github.com/i-execute // i_execute.t.me
 # Licensed under AGPLv3.
 
+
+
 import asyncio
 import contextlib
 import logging
@@ -14,29 +16,40 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+
 MAIN_SCOPE = f"{__package__}.main"
+
+
 
 DISABLED_FLAG = "heroku_disabled"
 
+
 STATE_KEY = "disable_state"
+
 
 LEGACY_LOOPS_OWNER = "heroku.disabled_loops"
 LEGACY_LOOPS_KEY = "modules"
 
+
 HOOK_TIMEOUT = 15.0
 
+
 LOOP_STOP_TIMEOUT = 5.0
+
 
 CHILD_KILL_TIMEOUT = 3.0
 
 
 class _SafeDict(dict):
 
+
     def __missing__(self, key: str) -> str:
         return "{" + key + "}"
 
 
 class LifecycleReport(typing.NamedTuple):
+
 
     action: str
     changed: bool
@@ -63,11 +76,16 @@ class LifecycleReport(typing.NamedTuple):
 
 class LifecycleManager:
 
+
     def __init__(self, client: "CustomTelegramClient", db: "Database"):
         self._client = client
         self._db = db
         self._lock = asyncio.Lock()
         self._startup_applied = False
+
+
+
+
 
     @property
     def _modules(self):
@@ -85,8 +103,13 @@ class LifecycleManager:
     def _security(self):
         return getattr(self._dispatcher, "security", None)
 
+
+
+
+
     @property
     def disabled(self) -> bool:
+
         return bool(self._db.get(MAIN_SCOPE, DISABLED_FLAG, False))
 
     @property
@@ -105,8 +128,13 @@ class LifecycleManager:
         if self._db.get(LEGACY_LOOPS_OWNER, LEGACY_LOOPS_KEY, None) is not None:
             self._db.set(LEGACY_LOOPS_OWNER, LEGACY_LOOPS_KEY, [])
 
+
+
+
+
     @property
     def trusted_ids(self) -> set[int]:
+
         trusted = {int(getattr(self._client, "tg_id", 0) or 0)}
 
         security = self._security
@@ -118,12 +146,17 @@ class LifecycleManager:
         return trusted
 
     def is_trusted(self, user_id: int | None) -> bool:
+
         try:
             user_id = int(user_id)
         except (TypeError, ValueError):
             return False
 
         return user_id in self.trusted_ids
+
+
+
+
 
     def _prefix(self) -> str:
         modules = self._modules
@@ -148,6 +181,10 @@ class LifecycleManager:
             text = text.format_map(_SafeDict(prefix=self._prefix(), **kwargs))
 
         return text
+
+
+
+
 
     def _iter_loops(self) -> typing.Iterator[tuple[typing.Any, str, typing.Any]]:
         from .loader import InfiniteLoop
@@ -213,6 +250,7 @@ class LifecycleManager:
             if isinstance(item, (list, tuple)) and len(item) == 2
         }
 
+
         legacy = self._db.get(LEGACY_LOOPS_OWNER, LEGACY_LOOPS_KEY, [])
         legacy = {str(name) for name in legacy} if isinstance(legacy, list) else set()
 
@@ -239,6 +277,10 @@ class LifecycleManager:
                 logger.exception("Failed to restore loop %s.%s", classname, name)
 
         return started
+
+
+
+
 
     def _owned_module_names(self) -> set[str]:
         modules = self._modules
@@ -304,6 +346,10 @@ class LifecycleManager:
 
         return cancelled
 
+
+
+
+
     @staticmethod
     def _kill_children() -> int:
         try:
@@ -336,6 +382,10 @@ class LifecycleManager:
 
         return len(killed)
 
+
+
+
+
     async def _suspend_inline(self) -> bool:
         inline = self._inline
         if inline is None or not hasattr(inline, "suspend"):
@@ -358,6 +408,10 @@ class LifecycleManager:
             logger.exception("Failed to resume inline bot")
             return False
 
+
+
+
+
     async def _fire_hook(self, hook: str) -> int:
         modules = self._modules
         if modules is None or not hasattr(modules, "fire_lifecycle_hook"):
@@ -369,6 +423,10 @@ class LifecycleManager:
             logger.exception("Failed to broadcast %s hook", hook)
             return 0
 
+
+
+
+
     async def disable(self, initiator: int | None = None) -> LifecycleReport:
 
         async with self._lock:
@@ -376,17 +434,26 @@ class LifecycleManager:
                 return LifecycleReport("disable", False)
 
             logger.warning("Disabling userbot (initiator=%s)", initiator)
+
+            # 1. Persist the flag first: every other part of the core checks
+
             self._set_flag(True)
             self._save_state(
                 loops=self._snapshot_loops(),
                 since=int(time.time()),
                 initiator=int(initiator or 0),
             )
+
+
             handlers = 0
             dispatcher = self._dispatcher
             if dispatcher is not None:
                 handlers = dispatcher.enter_dormant()
+
+
             notified = await self._fire_hook("on_disable")
+
+
             loops = await self._stop_loops()
             inline = await self._suspend_inline()
             tasks = self._cancel_tasks()
@@ -416,6 +483,7 @@ class LifecycleManager:
             )
 
     async def enable(self, initiator: int | None = None) -> LifecycleReport:
+
         async with self._lock:
             if not self.disabled:
                 return LifecycleReport("enable", False)
@@ -456,6 +524,7 @@ class LifecycleManager:
             )
 
     async def apply_startup_state(self) -> bool:
+
         if not self.disabled or self._startup_applied:
             return False
 
