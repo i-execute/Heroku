@@ -25,6 +25,7 @@ from telethon.errors import (
     AccessTokenInvalidError,
     ApiIdInvalidError,
     AuthKeyDuplicatedError,
+    FloodWaitError,
 )
 from telethon.errors.rpcerrorlist import AuthKeyUnregisteredError
 from telethon.network.connection import (
@@ -434,6 +435,13 @@ class Heroku:
             me = await bot.get_me()
         except (AccessTokenExpiredError, AccessTokenInvalidError):
             return "invalid"
+        except FloodWaitError as error:
+            self._bot_token_flood_wait = max(int(error.seconds), 1)
+            logging.warning(
+                "Bot token validation suspended for %d seconds by Telegram",
+                self._bot_token_flood_wait,
+            )
+            return "flood"
         except Exception:
             logging.exception("Bot token validation failed")
             return "network"
@@ -445,23 +453,51 @@ class Heroku:
             return "inline"
         return "ok"
 
+    @staticmethod
+    async def _terminal_input(prompt: str = "") -> str | None:
+        try:
+            return await asyncio.to_thread(input, prompt)
+        except EOFError:
+            return None
+
     async def _get_bot_token(self):
         token = get_config_key("bot_token") or ""
         while True:
             if not token:
-                token = (await asyncio.to_thread(input, "Bot token: ")).strip()
+                entered = await self._terminal_input("Bot token: ")
+                if entered is None:
+                    logging.error(
+                        "Bot token is missing. Stop the service and run Heroku from a terminal to enter it."
+                    )
+                    await asyncio.Event().wait()
+                token = entered.strip()
             status = await self._check_bot_token(token)
             if status == "ok":
                 save_config_key("bot_token", token)
                 return
+            if status == "flood":
+                delay = getattr(self, "_bot_token_flood_wait", 60) + 1
+                logging.warning("Bot token validation will retry in %d seconds", delay)
+                await asyncio.sleep(delay)
+                continue
             if status == "inline":
                 print("Inline mode is disabled for this bot.")
-                print("Enable inline mode in @BotFather and press Enter to retry.")
-                await asyncio.to_thread(input)
+                entered = await self._terminal_input(
+                    "Enable inline mode in @BotFather and press Enter to retry: "
+                )
+                if entered is None:
+                    logging.error(
+                        "Inline mode must be enabled before starting the service."
+                    )
+                    await asyncio.Event().wait()
                 continue
             if status == "network":
-                print("Could not validate the bot token. Check the connection and retry.")
-                await asyncio.to_thread(input, "Press Enter to retry: ")
+                print("Could not validate the bot token. Check the connection.")
+                entered = await self._terminal_input(
+                    "Press Enter to retry or close the terminal to retry in 60 seconds: "
+                )
+                if entered is None:
+                    await asyncio.sleep(60)
                 continue
             print("Invalid bot token.")
             save_config_key("bot_token", "")
@@ -804,7 +840,7 @@ class Heroku:
         except Exception as e:
             logging.exception("Unexpected exception in main loop: %s", e)
         finally:
-            logging.info("Bye!")
+            logging.info("Loop terminated")
             try:
                 self.loop.run_until_complete(self._shutdown_handler())
             except Exception:
