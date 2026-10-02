@@ -14,21 +14,21 @@ import emoji
 from . import utils
 _VALIDATORS_STRINGS = {
     "validators.boolean": "boolean",
-    "validators.positive": "positive",
-    "validators.negative": "negative",
-    "validators.digits": "with exactly {digits} digits",
+    "validators.positive": "positive ",
+    "validators.negative": "negative ",
+    "validators.digits": " with exactly {digits} digits",
     "validators.integer_min": "{sign}integer greater than {minimum}{digits}",
     "validators.integer_range": "{sign}integer from {minimum} to {maximum}{digits}",
     "validators.integer": "{sign}integer{digits}",
     "validators.integer_max": "{sign}integer less than {maximum}{digits}",
     "validators.choice": "one of the following: {possible}",
     "validators.multichoice": "list of values, where each one must be one of: {possible}",
-    "validators.each": "(each must be {each})",
-    "validators.fixed_len": "(exactly {fixed_len} pcs.)",
-    "validators.max_len": "(up to {max_len} pcs.)",
-    "validators.len_range": "(from {min_len} to {max_len} pcs.)",
-    "validators.min_len": "(at least {min_len} pcs.)",
-    "validators.series": "series of values{len}{each}, separated with «,»",
+    "validators.each": ", each value must be {each}",
+    "validators.fixed_len": " with exactly {fixed_len} items",
+    "validators.max_len": " with up to {max_len} items",
+    "validators.len_range": " with {min_len} to {max_len} items",
+    "validators.min_len": " with at least {min_len} items",
+    "validators.series": "list of values{len}{each}, separated by commas",
     "validators.link": "link",
     "validators.string_fixed_len": "string of length {length}",
     "validators.string": "string",
@@ -54,8 +54,9 @@ ConfigAllowedTypes = typing.Union[tuple, list, str, int, bool, None]
 
 ALLOWED_EMOJIS = set(emoji.EMOJI_DATA.keys())
 
-def _getdict(key: str, **kwargs) -> dict:
-    return {"en": _VALIDATORS_STRINGS[key].format(**kwargs) if kwargs else _VALIDATORS_STRINGS[key]}
+def _getdoc(key: str, **kwargs) -> str:
+    value = _VALIDATORS_STRINGS[key]
+    return value.format(**kwargs) if kwargs else value
 
 
 class ValidationError(Exception):
@@ -64,15 +65,11 @@ class Validator:
     def __init__(
         self,
         validator: Callable,
-        doc: str | dict | None = None,
-        _internal_id: int | None = None,
+        doc: str | None = None,
+        _internal_id: str | None = None,
     ):
         self.validate = validator
-
-        if isinstance(doc, str):
-            doc = {'en': doc}
-
-        self.doc = doc
+        self.doc = doc or "value"
         self.internal_id = _internal_id
 
 class Boolean(Validator):
@@ -87,7 +84,7 @@ class Boolean(Validator):
     def __init__(self):
         super().__init__(
             self._validate,
-            _getdict("validators.boolean"),
+            _getdoc("validators.boolean"),
             _internal_id="Boolean",
         )
 
@@ -106,66 +103,28 @@ class Integer(Validator):
         minimum: int | None = None,
         maximum: int | None = None,
     ):
-        _signs = (
-            _getdict("validators.positive")
-            if minimum is not None and minimum == 0
-            else (
-                _getdict("validators.negative")
-                if maximum is not None and maximum == 0
-                else {}
-            )
+        sign = (
+            _getdoc("validators.positive")
+            if minimum == 0
+            else _getdoc("validators.negative")
+            if maximum == 0
+            else ""
         )
-        _digits = (
-            _getdict("validators.digits", digits=digits)
-            if digits is not None
-            else {}
+        digits_doc = (
+            _getdoc("validators.digits", digits=digits) if digits is not None else ""
         )
-
-        match True:
-            case _ if minimum is not None and minimum != 0:
-                doc = (
-                    {
-                        lang: text.format(
-                            sign=_signs.get(lang, ""),
-                            digits=_digits.get(lang, ""),
-                            minimum=minimum,
-                        )
-                        for lang, text in _getdict(
-                            "validators.integer_min"
-                        ).items()
-                    }
-                    if maximum is None and maximum != 0
-                    else {
-                        lang: text.format(
-                            sign=_signs.get(lang, ""),
-                            digits=_digits.get(lang, ""),
-                            minimum=minimum,
-                            maximum=maximum,
-                        )
-                        for lang, text in _getdict(
-                            "validators.integer_range"
-                        ).items()
-                    }
-                )
-            case _ if maximum is None and maximum != 0:
-                doc = {
-                    lang: text.format(
-                        sign=_signs.get(lang, ""), digits=_digits.get(lang, "")
-                    )
-                    for lang, text in _getdict("validators.integer").items()
-                }
-            case _:
-                doc = {
-                    lang: text.format(
-                        sign=_signs.get(lang, ""),
-                        digits=_digits.get(lang, ""),
-                        maximum=maximum,
-                    )
-                    for lang, text in _getdict(
-                        "validators.integer_max"
-                    ).items()
-                }
-
+        if minimum is not None and minimum != 0:
+            key = "validators.integer_min" if maximum is None else "validators.integer_range"
+        elif maximum is None:
+            key = "validators.integer"
+        else:
+            key = "validators.integer_max"
+        doc = _getdoc(key).format(
+            sign=sign,
+            digits=digits_doc,
+            minimum=minimum,
+            maximum=maximum,
+        )
         super().__init__(
             functools.partial(
                 self._validate,
@@ -182,27 +141,23 @@ class Integer(Validator):
         value: ConfigAllowedTypes,
         /,
         *,
-        digits: int,
-        minimum: int,
-        maximum: int,
-    ) -> int | None:
+        digits: int | None,
+        minimum: int | None,
+        maximum: int | None,
+    ) -> int:
         try:
             value = int(str(value).strip())
-        except ValueError:
-            raise ValidationError(f"Passed value ({value}) must be a number")
-
+        except ValueError as error:
+            raise ValidationError(f"Passed value ({value}) must be a number") from error
         if minimum is not None and value < minimum:
             raise ValidationError(f"Passed value ({value}) is lower than minimum one")
-
         if maximum is not None and value > maximum:
             raise ValidationError(f"Passed value ({value}) is greater than maximum one")
-
         if digits is not None and len(str(value)) != digits:
             raise ValidationError(
                 f"The length of passed value ({value}) is incorrect "
                 f"(Must be exactly {digits} digits)"
             )
-
         return value
 
 class Choice(Validator):
@@ -213,7 +168,7 @@ class Choice(Validator):
     ):
         super().__init__(
             functools.partial(self._validate, possible_values=possible_values),
-            _getdict(
+            _getdoc(
                 "validators.choice",
                 possible=" / ".join(list(map(str, possible_values))),
             ),
@@ -244,7 +199,7 @@ class MultiChoice(Validator):
         possible = " / ".join(list(map(str, possible_values)))
         super().__init__(
             functools.partial(self._validate, possible_values=possible_values),
-            _getdict("validators.multichoice", possible=possible),
+            _getdoc("validators.multichoice", possible=possible),
             _internal_id="MultiChoice",
         )
 
@@ -275,33 +230,23 @@ class Series(Validator):
         max_len: int | None = None,
         fixed_len: int | None = None,
     ):
-        def trans(lang: str) -> str:
-            return validator.doc.get(lang, validator.doc["en"])
-
-        _each = (
-            {
-                lang: text.format(each=trans(lang))
-                for lang, text in _getdict("validators.each").items()
-            }
+        each = (
+            _getdoc("validators.each", each=validator.doc)
             if validator is not None
-            else {}
+            else ""
         )
-
-        match True:
-            case _ if fixed_len is not None:
-                _len = _getdict("validators.fixed_len", fixed_len=fixed_len)
-            case _ if min_len is None:
-                if max_len is None:
-                    _len = {}
-                else:
-                    _len = _getdict("validators.max_len", max_len=max_len)
-            case _ if max_len is not None:
-                _len = _getdict(
-                    "validators.len_range", min_len=min_len, max_len=max_len
-                )
-            case _:
-                _len = _getdict("validators.min_len", min_len=min_len)
-
+        if fixed_len is not None:
+            length = _getdoc("validators.fixed_len", fixed_len=fixed_len)
+        elif min_len is None:
+            length = (
+                "" if max_len is None else _getdoc("validators.max_len", max_len=max_len)
+            )
+        elif max_len is not None:
+            length = _getdoc(
+                "validators.len_range", min_len=min_len, max_len=max_len
+            )
+        else:
+            length = _getdoc("validators.min_len", min_len=min_len)
         super().__init__(
             functools.partial(
                 self._validate,
@@ -310,10 +255,7 @@ class Series(Validator):
                 max_len=max_len,
                 fixed_len=fixed_len,
             ),
-            {
-                lang: text.format(each=_each.get(lang, ""), len=_len.get(lang, ""))
-                for lang, text in _getdict("validators.series").items()
-            },
+            _getdoc("validators.series").format(each=each, len=length),
             _internal_id="Series",
         )
 
@@ -329,46 +271,37 @@ class Series(Validator):
     ) -> list[ConfigAllowedTypes]:
         if not isinstance(value, (list, tuple, set)):
             value = str(value).split(",")
-
         if isinstance(value, (tuple, set)):
             value = list(value)
-
         if min_len is not None and len(value) < min_len:
             raise ValidationError(
                 f"Passed value ({value}) contains less than {min_len} items"
             )
-
         if max_len is not None and len(value) > max_len:
             raise ValidationError(
                 f"Passed value ({value}) contains more than {max_len} items"
             )
-
         if fixed_len is not None and len(value) != fixed_len:
             raise ValidationError(
                 f"Passed value ({value}) must contain exactly {fixed_len} items"
             )
-
         value = [item.strip() if isinstance(item, str) else item for item in value]
-
         if isinstance(validator, Validator):
-            for i, item in enumerate(value):
+            for index, item in enumerate(value):
                 try:
-                    value[i] = validator.validate(item)
-                except ValidationError:
+                    value[index] = validator.validate(item)
+                except ValidationError as error:
                     raise ValidationError(
-                        f"Passed value ({value}) contains invalid item"
-                        f" ({str(item).strip()}), which must be {validator.doc['en']}"
-                    )
-
-        value = list(filter(lambda x: x, value))
-
-        return value
+                        f"Passed value ({value}) contains invalid item "
+                        f"({str(item).strip()}), which must be {validator.doc}"
+                    ) from error
+        return list(filter(lambda item: item, value))
 
 class Link(Validator):
     def __init__(self):
         super().__init__(
             lambda value: self._validate(value),
-            _getdict("validators.link"),
+            _getdoc("validators.link"),
             _internal_id="Link",
         )
 
@@ -390,22 +323,22 @@ class String(Validator):
         max_len: int | None = None,
     ):
         if length is not None:
-            doc = _getdict("validators.string_fixed_len", length=length)
+            doc = _getdoc("validators.string_fixed_len", length=length)
         else:
             match True:
                 case _ if min_len is None:
                     if max_len is None:
-                        doc = _getdict("validators.string")
+                        doc = _getdoc("validators.string")
                     else:
-                        doc = _getdict(
+                        doc = _getdoc(
                             "validators.string_max_len", max_len=max_len
                         )
                 case _ if max_len is not None:
-                    doc = _getdict(
+                    doc = _getdoc(
                         "validators.string_len_range", min_len=min_len, max_len=max_len
                     )
                 case _:
-                    doc = _getdict(
+                    doc = _getdoc(
                         "validators.string_min_len", min_len=min_len
                     )
 
@@ -460,24 +393,16 @@ class RegExp(Validator):
         self,
         regex: str,
         flags: re.RegexFlag | None = None,
-        description: dict | str | None = None,
+        description: str | dict | None = None,
     ):
-        if not flags:
-            flags = 0
-
+        flags = flags or 0
         try:
             re.compile(regex, flags=flags)
-        except re.error as e:
-            raise Exception(f"{regex} is not a valid regex") from e
-
-        if description is None:
-            doc = _getdict("validators.regex", regex=regex)
-        else:
-            if isinstance(description, str):
-                doc = {"en": description}
-            else:
-                doc = description
-
+        except re.error as error:
+            raise ValueError(f"{regex} is not a valid regex") from error
+        if isinstance(description, dict):
+            description = next(iter(description.values()), None)
+        doc = description or _getdoc("validators.regex", regex=regex)
         super().__init__(
             functools.partial(self._validate, regex=regex, flags=flags),
             doc,
@@ -494,7 +419,6 @@ class RegExp(Validator):
     ) -> str:
         if not re.match(regex, str(value), flags=flags):
             raise ValidationError(f"Passed value ({value}) must follow pattern {regex}")
-
         return str(value)
 
 class Float(Validator):
@@ -503,50 +427,26 @@ class Float(Validator):
         minimum: float | None = None,
         maximum: float | None = None,
     ):
-        _signs = (
-            _getdict("validators.positive")
-            if minimum is not None and minimum == 0
-            else (
-                _getdict("validators.negative")
-                if maximum is not None and maximum == 0
-                else {}
-            )
+        sign = (
+            _getdoc("validators.positive")
+            if minimum == 0
+            else _getdoc("validators.negative")
+            if maximum == 0
+            else ""
         )
-
         if minimum is not None and minimum != 0:
-            doc = (
-                {
-                    lang: text.format(sign=_signs.get(lang, ""), minimum=minimum)
-                    for lang, text in _getdict("validators.float_min").items()
-                }
-                if maximum is None and maximum != 0
-                else {
-                    lang: text.format(
-                        sign=_signs.get(lang, ""), minimum=minimum, maximum=maximum
-                    )
-                    for lang, text in _getdict(
-                        "validators.float_range"
-                    ).items()
-                }
-            )
-
-        elif maximum is None and maximum != 0:
-            doc = {
-                lang: text.format(sign=_signs.get(lang, ""))
-                for lang, text in _getdict("validators.float").items()
-            }
+            key = "validators.float_min" if maximum is None else "validators.float_range"
+        elif maximum is None:
+            key = "validators.float"
         else:
-            doc = {
-                lang: text.format(sign=_signs.get(lang, ""), maximum=maximum)
-                for lang, text in _getdict("validators.float_max").items()
-            }
-
+            key = "validators.float_max"
+        doc = _getdoc(key).format(
+            sign=sign,
+            minimum=minimum,
+            maximum=maximum,
+        )
         super().__init__(
-            functools.partial(
-                self._validate,
-                minimum=minimum,
-                maximum=maximum,
-            ),
+            functools.partial(self._validate, minimum=minimum, maximum=maximum),
             doc,
             _internal_id="Float",
         )
@@ -561,15 +461,12 @@ class Float(Validator):
     ) -> float:
         try:
             value = float(str(value).strip().replace(",", "."))
-        except ValueError:
-            raise ValidationError(f"Passed value ({value}) must be a float")
-
+        except ValueError as error:
+            raise ValidationError(f"Passed value ({value}) must be a float") from error
         if minimum is not None and value < minimum:
             raise ValidationError(f"Passed value ({value}) is lower than minimum one")
-
         if maximum is not None and value > maximum:
             raise ValidationError(f"Passed value ({value}) is greater than maximum one")
-
         return value
 
 class TelegramID(Validator):
@@ -599,21 +496,13 @@ class TelegramID(Validator):
 
 class Union(Validator):
     def __init__(self, *validators):
-        doc = _getdict("validators.union")
-
-        def case(x: str) -> str:
-            return x[0].upper() + x[1:]
-
-        for validator in validators:
-            for key in doc:
-                doc[key] += f"- {case(validator.doc.get(key, validator.doc['en']))}\n"
-
-        for key, value in doc.items():
-            doc[key] = value.strip()
-
+        lines = [validator.doc[:1].upper() + validator.doc[1:] for validator in validators]
+        doc = _getdoc("validators.union") + "\n" + "\n".join(
+            f"- {line}" for line in lines
+        )
         super().__init__(
             functools.partial(self._validate, validators=validators),
-            doc,
+            doc.strip(),
             _internal_id="Union",
         )
 
@@ -629,14 +518,13 @@ class Union(Validator):
                 return validator.validate(value)
             except ValidationError:
                 pass
-
         raise ValidationError(f"Passed value ({value}) is not valid")
 
 class NoneType(Validator):
     def __init__(self):
         super().__init__(
             self._validate,
-            _getdict("validators.empty"),
+            _getdoc("validators.empty"),
             _internal_id="NoneType",
         )
 
@@ -676,17 +564,17 @@ class Emoji(Validator):
     ):
         match True:
             case _ if length is not None:
-                doc = _getdict("validators.emoji_fixed_len", length=length)
+                doc = _getdoc("validators.emoji_fixed_len", length=length)
             case _ if min_len is not None and max_len is not None:
-                doc = _getdict(
+                doc = _getdoc(
                     "validators.emoji_len_range", min_len=min_len, max_len=max_len
                 )
             case _ if min_len is not None:
-                doc = _getdict("validators.emoji_min_len", min_len=min_len)
+                doc = _getdoc("validators.emoji_min_len", min_len=min_len)
             case _ if max_len is not None:
-                doc = _getdict("validators.emoji_max_len", max_len=max_len)
+                doc = _getdoc("validators.emoji_max_len", max_len=max_len)
             case _:
-                doc = _getdict("validators.emoji")
+                doc = _getdoc("validators.emoji")
 
         super().__init__(
             functools.partial(
@@ -745,7 +633,7 @@ class EntityLike(RegExp):
     def __init__(self):
         super().__init__(
             regex=r"^(?:@|https?://t\.me/)?(?:[a-zA-Z0-9_]{5,32}|[a-zA-Z0-9_]{1,32}\?[a-zA-Z0-9_]{1,32})$",
-            description=_getdict("validators.entity_like"),
+            description=_getdoc("validators.entity_like"),
         )
 
     @staticmethod
@@ -790,10 +678,7 @@ class RandomLink(Series):
     def __init__(self):
         super().__init__(validator=Link(), min_len=1)
         self.internal_id = "Series"
-        self.doc = {
-            "en": "A list of links, one of which will be chosen randomly",
-            "ru": "Список ссылок, одна из которых будет выбрана случайным образом",
-        }
+        self.doc = "A list of links, one of which will be chosen randomly"
 
     @staticmethod
     def _validate(value: ConfigAllowedTypes, /, **kwargs) -> RandomLinkList:
@@ -802,6 +687,5 @@ class RandomLink(Series):
             val_args["validator"] = Link()
         if "min_len" not in val_args:
             val_args["min_len"] = 1
-
         clean_list = Series._validate(value, **val_args)
         return RandomLinkList(clean_list)

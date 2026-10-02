@@ -1,5 +1,3 @@
-"""Module `strings` dicts: keys used in code exist; positional slots == format args."""
-
 import ast
 import pathlib
 import string
@@ -42,10 +40,6 @@ def named_fields(tpl: str) -> set:
 
 
 def dyn_keys(sl: ast.expr, section: str) -> list[str]:
-    """Extract literal keys from a strings[] slice: constant, conditional
-    (both branches), or f-string prefix matched against the en pack.
-    Empty prefix (f"{group}_added") matches nothing — caller keys are
-    unknowable statically, we skip them rather than false-positive."""
     if isinstance(sl, ast.Constant):
         return [sl.value]
     if isinstance(sl, ast.JoinedStr):
@@ -77,7 +71,7 @@ def section_for(path: pathlib.Path) -> str | None:
 
 def main() -> int:
     packs = {"en": EN_PACK}
-    calls = {}  # (section, key) -> (pos_args, kwarg_names)
+    calls = {}
     used = set()
 
     for mod_file in (ROOT / "heroku").rglob("*.py"):
@@ -94,8 +88,8 @@ def main() -> int:
         class V(ast.NodeVisitor):
             def visit_Call(self, node: ast.Call):
                 f = node.func
-                # self.strings[<anything>].format(...) — covers conditional
-                # slices ("a" if x else "b") and f-strings (dynamic keys)
+
+
                 if (
                     isinstance(f, ast.Attribute)
                     and f.attr == "format"
@@ -116,7 +110,7 @@ def main() -> int:
                         prev = calls.get((section, k), (0, set()))
                         if pos > prev[0] or kws - prev[1]:
                             calls[(section, k)] = (max(prev[0], pos), prev[1] | kws)
-                # self.strings["key"] (used at all)
+
                 elif (
                     isinstance(f, ast.Subscript)
                     and isinstance(f.value, ast.Attribute)

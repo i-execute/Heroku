@@ -15,11 +15,9 @@ from telethon import utils as tl_utils
 from telethon.extensions import html as html_parser
 from telethon.errors.rpcerrorlist import TopicDeletedError
 from telethon.hints import EntityLike
-from telethon.network import MTProtoSender
 from telethon.tl import functions
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.users import GetFullUserRequest
-from telethon.tl.tlobject import TLRequest
 from telethon.tl.types import (
     ChannelFull,
     InputReplyToMessage,
@@ -34,7 +32,6 @@ from telethon.tl.types import (
     User,
     UserFull,
 )
-from telethon.utils import is_list_like
 
 from ._internal import tag_client_id
 from .types import (
@@ -42,7 +39,6 @@ from .types import (
     CacheRecordFullChannel,
     CacheRecordFullUser,
     CacheRecordPerms,
-    Module,
 )
 
 if typing.TYPE_CHECKING:
@@ -84,8 +80,6 @@ class CustomTelegramClient(TelegramClient):
             str | int,
             CacheRecordFullUser,
         ] = {}
-
-        self._forbidden_constructors: list[int] = []
 
         self._raw_updates_processor: None | (
             typing.Callable[
@@ -466,10 +460,6 @@ class CustomTelegramClient(TelegramClient):
     def heroku_fulluser_cache(self) -> dict[int, CacheRecordFullUser]:
         return self._heroku_fulluser_cache
 
-    @property
-    def forbidden_constructors(self) -> list[str]:
-        return self._forbidden_constructors
-
     async def force_get_entity(self, *args, **kwargs):
         return await self.get_entity(*args, force=True, **kwargs)
 
@@ -614,7 +604,6 @@ class CustomTelegramClient(TelegramClient):
             logger.debug("Saved hashable_entity %s perms to cache", hashable_entity)
 
             def save_user(key: str | int):
-                nonlocal self, cache_record, user, hashable_user
                 if getattr(user, "id", None):
                     self._heroku_perms_cache.setdefault(key, {})[user.id] = cache_record
 
@@ -815,65 +804,6 @@ class CustomTelegramClient(TelegramClient):
             *args,
             **kwargs,
         )
-
-    async def _call(
-        self,
-        sender: MTProtoSender,
-        request: TLRequest,
-        ordered: bool = False,
-        flood_sleep_threshold: int | None = None,
-    ):
-        not_tuple = False
-        if not is_list_like(request):
-            not_tuple = True
-            request = (request,)
-
-        new_request = []
-
-        for item in request:
-            if item.CONSTRUCTOR_ID in self._forbidden_constructors and next(
-                (
-                    frame_info.frame.f_locals["self"]
-                    for frame_info in inspect.stack()
-                    if hasattr(frame_info, "frame")
-                    and hasattr(frame_info.frame, "f_locals")
-                    and isinstance(frame_info.frame.f_locals, dict)
-                    and "self" in frame_info.frame.f_locals
-                    and isinstance(frame_info.frame.f_locals["self"], Module)
-                    and not getattr(
-                        frame_info.frame.f_locals["self"], "__origin__", ""
-                    ).startswith("<core")
-                ),
-                None,
-            ):
-                logger.debug(
-                    " I protected you from unintented %s (%s)!",
-                    item.__class__.__name__,
-                    item,
-                )
-                continue
-
-            new_request += [item]
-
-        if not new_request:
-            return
-
-        return await super()._call(
-            sender,
-            new_request[0] if not_tuple else tuple(new_request),
-            ordered,
-            flood_sleep_threshold,
-        )
-
-    def _internal_forbid_ctor(self, constructors: list):
-        self._forbidden_constructors.extend(constructors)
-        self._forbidden_constructors = list(set(self._forbidden_constructors))
-
-    def forbid_constructor(self, constructor: int):
-        self._internal_forbid_ctor([constructor])
-
-    def forbid_constructors(self, constructors: list):
-        self._internal_forbid_ctor(constructors)
 
     def _handle_update(
         self: "CustomTelegramClient",

@@ -28,6 +28,13 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _input_title_symbol(length: int) -> str:
+    cycles = ("ABXY↑↓←→", "↑↓←→ABXY")
+    cycle = cycles[(length // 8) % 2]
+    return cycle[length % len(cycle)]
+
+
 class Placeholder:
     pass
 class Form(InlineUnit):
@@ -287,7 +294,6 @@ class Form(InlineUnit):
         }
 
         async def answer(msg: str):
-            nonlocal message
             if isinstance(message, Message):
                 await (message.edit if message.out else message.respond)(
                     msg,
@@ -373,7 +379,6 @@ class Form(InlineUnit):
         except IndexError:
             return
 
-        arrows = ["→", "↓", "←", "↑"]
         for unit in self._units.copy().values():
             for button in utils.array_sum(unit.get("buttons", [])):
                 if (
@@ -389,15 +394,15 @@ class Form(InlineUnit):
 
                     parts = inline_query.query.split(maxsplit=1)
                     input_text = parts[1] if len(parts) > 1 else ""
-                    arrow_idx = len(input_text) % len(arrows)
+                    symbol = _input_title_symbol(len(input_text))
                     await inline_query.answer(
                         [
                             await inline_query.builder.article(
-                                title=button["input"] + " " + arrows[arrow_idx],
+                                title=button["input"] + " " + symbol,
                                 description=(
                                     self.translator.getkey("inline.keep_id").format("")
                                 ),
-                                text="📝",
+                                text="\u2063",
                                 parse_mode="HTML",
                                 link_preview=False,
                                 id=utils.rand(20),

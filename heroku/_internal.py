@@ -180,5 +180,3 @@ def get_branch_name(repo_path):
         branch_name = branch_name.strip().lstrip("refs/heads/")
 
     return branch_name
-
-

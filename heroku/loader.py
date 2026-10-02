@@ -3,6 +3,7 @@
 
 # (c) Dan Gazizullin, 2021-2023. This file is part of the Hikka Userbot: github.com/hikariatama/Hikka
 
+import ast
 import asyncio
 import builtins
 import contextlib
@@ -22,13 +23,14 @@ from uuid import uuid4
 
 from telethon.tl.tlobject import TLObject
 
-import heroku._herokutl_compat
+from ._compat import _install as install_compat
+
+install_compat()
 
 from . import main, security, utils, validators
 from ._internal import resolve_client_id, set_client_id, tag_client_id
 from .database import Database
 from .inline.core import BotUpdateType, InlineManager
-from .translations import Strings
 from .types import (
     Command,
     ConfigCategory,
@@ -46,6 +48,7 @@ from .types import (
     SelfUnload,
     StopLoop,
     StringLoader,
+    Strings,
     get_callback_handlers,
     get_commands,
     get_inline_handlers,
@@ -251,11 +254,6 @@ MODULES_NAME = "Modules"
 
 
 
-LIFECYCLE_STATE_ATTR = "__heroku_lifecycle_state__"
-
-ru_keys = 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,'
-en_keys = "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~@#$%^&QWERTYUIOP{}ASDFGHJKL:\"|ZXCVBNM<>?"
-
 BASE_DIR = (
     "/data"
     if "DOCKER" in os.environ
@@ -295,19 +293,81 @@ def module_class_name(source: str | bytes) -> str | None:
     )
 
 
-def save_module_source(source: str | bytes, class_name: str | None = None) -> Path:
+def _module_source_files(class_name: str, directory: Path | None = None) -> list[Path]:
+    directory = directory or MODULES_PATH
+    if not directory.exists():
+        return []
+    result = []
+    for path in directory.glob("*.py"):
+        try:
+            source_class = module_class_name(path.read_bytes())
+        except OSError:
+            continue
+        if source_class == class_name or path.stem == class_name:
+            result.append(path)
+    return result
 
+
+def remove_module_source(class_name: str) -> list[Path]:
+    removed = []
+    for path in _module_source_files(class_name):
+        try:
+            path.unlink()
+            removed.append(path)
+        except FileNotFoundError:
+            pass
+    return removed
+
+
+def save_module_source(source: str | bytes, class_name: str | None = None) -> Path:
     class_name = class_name or module_class_name(source)
     if not class_name or not class_name.isidentifier():
         raise ValueError("Module class name could not be determined")
-
     if isinstance(source, str):
         source = source.encode("utf-8")
-
+    MODULES_PATH.mkdir(parents=True, exist_ok=True)
     path = MODULES_PATH / f"{class_name}.py"
-    path.write_bytes(source)
+    temporary = MODULES_PATH / f".{class_name}.{uuid4().hex}.tmp"
+    try:
+        temporary.write_bytes(source)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    for stale in _module_source_files(class_name):
+        if stale != path:
+            stale.unlink(missing_ok=True)
     return path
 
+
+def _external_module_files() -> list[Path]:
+    if not MODULES_PATH.exists():
+        return []
+    grouped = {}
+    unmatched = []
+    for path in (Path(item) for item in _iter_module_files(MODULES_PATH)):
+        try:
+            class_name = module_class_name(path.read_bytes())
+        except OSError:
+            continue
+        if not class_name:
+            unmatched.append(path.resolve())
+            continue
+        grouped.setdefault(class_name, []).append(path)
+    selected = []
+    for class_name, paths in grouped.items():
+        canonical = MODULES_PATH / f"{class_name}.py"
+        latest = max(
+            paths,
+            key=lambda item: (
+                item.stat().st_mtime_ns,
+                item == canonical,
+                item.name,
+            ),
+        )
+        if latest != canonical or len(paths) > 1:
+            canonical = save_module_source(latest.read_bytes(), class_name)
+        selected.append(canonical.resolve())
+    return sorted(selected + unmatched, key=lambda item: item.name)
 
 def _iter_module_files(
     directory: str | Path,
@@ -325,59 +385,33 @@ def _iter_module_files(
             and (include(entry.name) if include else True)
         ]
 
-def translatable_docstring(cls):
-    @wraps(cls.config_complete)
+def bind_module_docs(cls):
+    original = cls.config_complete
+
+    @wraps(original)
     def config_complete(self, *args, **kwargs):
-        def proccess_decorators(mark: str, obj: str):
-            nonlocal self
-            for attr in dir(func_):
-                if (
-                    attr.endswith("_doc")
-                    and attr.count("_") == 1
-                    and isinstance(getattr(func_, attr), str)
-                ):
-                    var = f"strings_{attr.split('_')[0]}"
-                    if not hasattr(self, var):
-                        setattr(self, var, {})
 
-                    getattr(self, var).setdefault(f"{mark}{obj}", getattr(func_, attr))
+        for command_name, function in get_commands(cls).items():
+            value = self.strings.get(f"_cmd_doc_{command_name}")
+            if value:
+                function.__doc__ = value
 
-        for command_, func_ in get_commands(cls).items():
-            proccess_decorators("_cmd_doc_", command_)
-            try:
-                func_.__doc__ = self.strings[f"_cmd_doc_{command_}"]
-            except AttributeError:
-                func_.__func__.__doc__ = self.strings[f"_cmd_doc_{command_}"]
+        for handler_name, function in get_inline_handlers(cls).items():
+            value = self.strings.get(f"_ihandle_doc_{handler_name}")
+            if value:
+                function.__doc__ = value
 
-        for inline_handler_, func_ in get_inline_handlers(cls).items():
-            proccess_decorators("_ihandle_doc_", inline_handler_)
-            try:
-                func_.__doc__ = self.strings[f"_ihandle_doc_{inline_handler_}"]
-            except AttributeError:
-                func_.__func__.__doc__ = self.strings[f"_ihandle_doc_{inline_handler_}"]
+        class_doc = self.strings.get("_cls_doc")
+        if class_doc:
+            self.__doc__ = class_doc
+        return original(self, *args, **kwargs)
 
-        self.__doc__ = self.strings["_cls_doc"]
-
-        return (
-            self.config_complete._old_(self, *args, **kwargs)
-            if not kwargs.pop("reload_dynamic_translate", None)
-            else True
-        )
-
-    config_complete._old_ = cls.config_complete
     cls.config_complete = config_complete
-
-    for command_, func in get_commands(cls).items():
-        cls.strings[f"_cmd_doc_{command_}"] = inspect.getdoc(func)
-
-    for inline_handler_, func in get_inline_handlers(cls).items():
-        cls.strings[f"_ihandle_doc_{inline_handler_}"] = inspect.getdoc(func)
-
-    cls.strings["_cls_doc"] = inspect.getdoc(cls)
-
     return cls
 
-tds = translatable_docstring
+
+tds = bind_module_docs
+
 
 def ratelimit(func: Command) -> Command:
     func.ratelimit = True
@@ -512,10 +546,7 @@ class Modules:
             external_mods = (
                 []
                 if self.secure_boot
-                else [
-                    Path(mod).resolve()
-                    for mod in _iter_module_files(MODULES_DIR)
-                ]
+                else _external_module_files()
             )
 
         loaded = []
@@ -560,6 +591,41 @@ class Modules:
 
         return loaded
 
+    @staticmethod
+    def _select_module_strings(module: Module) -> dict:
+        own_values = dict(vars(module.__class__))
+        own_values.update(vars(module))
+        inherited_values = {}
+        for cls in reversed(module.__class__.__mro__[1:]):
+            inherited_values.update(vars(cls))
+
+        def mapping(value: typing.Any) -> dict | None:
+            if isinstance(value, dict):
+                return dict(value)
+            if inspect.isclass(value):
+                result = {
+                    key: item
+                    for key, item in vars(value).items()
+                    if not key.startswith("_") and isinstance(item, str)
+                }
+                return result or None
+            return None
+
+        def candidates(values: dict) -> dict:
+            return {
+                name: result
+                for name, value in values.items()
+                if "strings" in name.lower() and (result := mapping(value)) is not None
+            }
+
+        variants = candidates(own_values) or candidates(inherited_values)
+        priorities = ("strings_en", "strings_ru", "strings")
+        for preferred in priorities:
+            for name, value in variants.items():
+                if name.lower() == preferred:
+                    return value
+        return next(iter(variants.values()), {})
+
     @tag_client_id("client.tg_id")
     async def register_module(
         self,
@@ -599,6 +665,7 @@ class Modules:
                 raise TypeError(f"Instance is not a Module, it is {type(ret)}")
 
         ret.__origin__ = origin
+        ret.strings = self._select_module_strings(ret)
 
         ret.__source__ = (
             source_data if source_data else inspect.getsource(ret.__class__)
@@ -808,12 +875,13 @@ class Modules:
         key = main.__name__
         default = "."
 
+        main_prefix = utils.normalize_prefix(
+            self._db.get(key, "command_prefix", default), default
+        )
         if ent_id:
             prefixes = self._db.get(key, "command_prefixes", {})
-            result = prefixes.get(str(ent_id), default)
-        else:
-            result = self._db.get(key, "command_prefix", default)
-        return result
+            return utils.normalize_prefix(prefixes.get(str(ent_id)), main_prefix)
+        return main_prefix
 
     def get_prefixes(self) -> set[str]:
         from . import main
@@ -821,11 +889,15 @@ class Modules:
         key = main.__name__
         default = "."
 
-        prefixes = ()
-        prefixes += tuple(self._db.get(key, "command_prefixes", {}).values())
-        prefixes += tuple(self._db.get(key, "command_prefix", default))
-
-        return set(prefixes)
+        main_prefix = utils.normalize_prefix(
+            self._db.get(key, "command_prefix", default), default
+        )
+        prefixes = {
+            utils.normalize_prefix(value, main_prefix)
+            for value in self._db.get(key, "command_prefixes", {}).values()
+        }
+        prefixes.add(main_prefix)
+        return prefixes
 
     @tag_client_id("client.tg_id")
     async def complete_registration(self, instance: Module):
@@ -966,10 +1038,8 @@ class Modules:
         if skip_hook:
             return
 
-        if not hasattr(mod, "strings"):
-            mod.strings = {}
-
-        mod.strings = Strings(mod)
+        if not isinstance(mod.strings, Strings):
+            mod.strings = Strings(mod)
 
         try:
             mod.config_complete()
@@ -1034,13 +1104,11 @@ class Modules:
             self.modules.remove(mod)
             raise
 
-        userbot_disabled = self._db.get(main.__name__, "heroku_disabled", False)
-
         for _, method in utils.iter_attrs(mod):
             if isinstance(method, InfiniteLoop):
                 setattr(method, "module_instance", mod)
 
-                if method.autostart and not userbot_disabled:
+                if method.autostart:
                     method.start()
 
                 logger.debug("Added module %s to method %s", mod, method)
@@ -1053,88 +1121,6 @@ class Modules:
         self.register_watchers(mod)
         self.register_raw_handlers(mod)
         self.register_bot_update_handlers(mod)
-
-        if userbot_disabled:
-
-
-
-            await self.fire_lifecycle_hook("on_disable", only=mod)
-
-    @staticmethod
-    def _overrides_lifecycle_hook(mod: typing.Any, hook: str) -> bool:
-
-        own = getattr(type(mod), hook, None)
-        return own is not None and own is not getattr(Module, hook, None)
-
-    async def _fire_lifecycle_hook_one(
-        self,
-        name: str,
-        func: typing.Callable,
-        hook: str,
-        timeout: float,
-    ):
-        try:
-            coro = (
-                func(self.client, self._db)
-                if len(inspect.signature(func).parameters) == 2
-                else func()
-            )
-
-            await asyncio.wait_for(coro, timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Hook `%s` of %s took more than %s seconds, moving on",
-                hook,
-                name,
-                timeout,
-            )
-        except Exception:
-            logger.exception("Can't process `%s` hook of %s", hook, name)
-
-    @tag_client_id("client.tg_id")
-    async def fire_lifecycle_hook(
-        self,
-        hook: str,
-        *,
-        only: Module | None = None,
-        timeout: float = 15.0,
-    ) -> list[str]:
-
-        if hook not in {"on_disable", "on_enable"}:
-            raise ValueError(f"Unknown lifecycle hook: {hook}")
-
-        state = "disabled" if hook == "on_disable" else "enabled"
-        targets = (
-            [only] if only is not None else [*self.modules, *self.libraries]
-        )
-
-        notified = []
-        coros = []
-
-        for mod in targets:
-            if mod is None:
-                continue
-
-            if getattr(mod, LIFECYCLE_STATE_ATTR, "enabled") == state:
-                continue
-
-            setattr(mod, LIFECYCLE_STATE_ATTR, state)
-
-            func = getattr(mod, hook, None)
-            if not callable(func) or not self._overrides_lifecycle_hook(mod, hook):
-                continue
-
-            name = getattr(mod, "name", None) or mod.__class__.__name__
-            notified.append(name)
-            coros.append(self._fire_lifecycle_hook_one(name, func, hook, timeout))
-
-        if coros:
-            await asyncio.gather(*coros, return_exceptions=True)
-
-        if notified:
-            logger.debug("Sent `%s` to %s", hook, ", ".join(notified))
-
-        return notified
 
     def get_classname(self, name: str) -> str:
         return next(
@@ -1163,10 +1149,7 @@ class Modules:
                 worked += [module.__class__.__name__]
 
                 name = module.__class__.__name__
-                path = os.path.join(MODULES_DIR, f"{name}.py")
-
-                if os.path.isfile(path):
-                    os.remove(path)
+                for path in remove_module_source(name):
                     logger.debug("Removed %s file at path %s", name, path)
 
                 logger.debug("Removing module %s for unload", module)
@@ -1243,5 +1226,3 @@ class Modules:
 
     async def log(self, *args, **kwargs):
         pass
-    async def reload_translations(self) -> bool:
-        return True

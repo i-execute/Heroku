@@ -94,7 +94,7 @@ class Database(dict):
                 description=" Content related to Heroku will be here",
                 silent=True,
                 invite_bot=True,
-                avatar=utils.get_asset_path("Heroku.png"),
+                avatar=utils.get_asset_path("Heroku.PNG"),
                 forum=True,
                 hide_general=True,
                 _folder="heroku",

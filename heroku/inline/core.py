@@ -4,7 +4,6 @@
 # (c) Dan Gazizullin, 2021-2023. This file is part of the Hikka Userbot: github.com/hikariatama/Hikka
 
 import asyncio
-import contextlib
 import logging
 import os
 import sqlite3
@@ -17,23 +16,11 @@ from telethon.errors.rpcerrorlist import (
     AccessTokenInvalidError,
     AuthKeyUnregisteredError,
     FloodWaitError,
-    InputUserDeactivatedError,
-    UserIsBlockedError,
-    YouBlockedUserError,
 )
 from telethon.sessions import SQLiteSession
 from telethon.tl.custom import InlineResults
-from telethon.tl.functions.contacts import UnblockRequest
-from telethon.tl.functions.messages import (
-    GetDialogFiltersRequest,
-    SetTypingRequest,
-    UpdateDialogFilterRequest,
-)
 from telethon.tl.types import (
-    DialogFilter,
-    InputPeerUser,
     Message,
-    SendMessageTypingAction,
     UpdateBotChatBoost,
     UpdateBotChatInviteRequester,
     UpdateBotGuestChatQuery,
@@ -47,8 +34,6 @@ from telethon.tl.types import (
     UpdateMessagePoll,
     UpdateMessagePollVote,
 )
-from telethon.utils import get_display_name
-
 from .. import main, utils
 from ..database import Database
 from ._strings import _ServiceStrings
@@ -60,7 +45,6 @@ from .gallery import Gallery
 from .list import List
 from .query_gallery import QueryGallery
 from .tl import TelethonBot, web_document
-from .token_obtainment import TokenObtainment
 from .utils import Utils
 
 logger = logging.getLogger(__name__)
@@ -121,7 +105,6 @@ _BOT_UPDATE_EVENTS: dict[BotUpdateType, typing.Callable[[], object]] = {
 class InlineManager(
     Utils,
     Events,
-    TokenObtainment,
     Form,
     Gallery,
     QueryGallery,
@@ -147,12 +130,8 @@ class InlineManager(
         self._markup_ttl = 60 * 60 * 24
         self.init_complete = False
 
-        self._token = main.get_config_key("bot_token")
-
         self._me: int = None
-        self._name: str = None
         self._bot_client: TelegramClient = None
-        self._task: asyncio.Future = None
         self._cleaner_task: asyncio.Future = None
         self.bot: TelethonBot = None
         self.bot_id: int = None
@@ -160,58 +139,6 @@ class InlineManager(
 
         self._bot_update_handlers: dict[str, tuple[str, typing.Callable]] = {}
         self._bot_handler_refs: dict[str, tuple[typing.Callable, object]] = {}
-
-
-        self._suspended: bool = False
-
-    @property
-    def suspended(self) -> bool:
-
-        return self._suspended
-
-    async def suspend(self) -> bool:
-
-        if self._suspended:
-            return False
-
-        self._suspended = True
-
-        if self._cleaner_task:
-            self._cleaner_task.cancel()
-            self._cleaner_task = None
-
-        if not self._bot_client:
-            return True
-
-        for callback in {
-            callback for callback, _ in self._bot_client.list_event_handlers()
-        }:
-            with contextlib.suppress(Exception):
-                self._bot_client.remove_event_handler(callback)
-
-        self._bot_handler_refs.clear()
-        logger.debug("Inline bot is suspended")
-
-        return True
-
-    async def resume(self) -> bool:
-
-        if not self._suspended:
-            return False
-
-        self._suspended = False
-
-        if not self._bot_client or not self.init_complete:
-            return True
-
-        self._register_builtin_handlers()
-
-        if not self._cleaner_task or self._cleaner_task.done():
-            self._cleaner_task = asyncio.ensure_future(self._cleaner())
-
-        logger.debug("Inline bot is resumed")
-
-        return True
 
     async def _cleaner(self):
         while True:
@@ -270,30 +197,19 @@ class InlineManager(
                     "Failed to remove stale bot session file %s", entry.path
                 )
 
-    async def register_manager(
-        self,
-        after_break: bool = False,
-        ignore_token_checks: bool = False,
-        force_new_bot: bool = False,
-    ):
+    async def register_manager(self):
         self._me = self._client.tg_id
-        self._name = get_display_name(self._client.heroku_me)
-
-        if not ignore_token_checks:
-            is_token_asserted = await self._assert_token(skip_search=force_new_bot)
-            if not is_token_asserted:
-                self.init_complete = False
-                return
-
-        self.init_complete = True
-
+        token = main.get_config_key("bot_token")
+        self.init_complete = False
+        if not token:
+            logger.critical("Bot token is missing. Restart and enter it in the terminal.")
+            return False
         if self._bot_client:
             try:
                 await self._bot_client.disconnect()
             except Exception:
                 pass
-
-        bot_uid = self._token.split(":", 1)[0]
+        bot_uid = token.split(":", 1)[0]
         self._cleanup_stale_bot_sessions(bot_uid)
         self._bot_client = TelegramClient(
             SQLiteSession(
@@ -303,148 +219,37 @@ class InlineManager(
             self._client.api_hash,
             receive_updates=True,
         )
-
         try:
-            await self._bot_client.start(bot_token=self._token)
-            self.bot = TelethonBot(self._bot_client)
-            self._bot = self.bot
-            self._register_builtin_handlers()
+            await self._bot_client.start(bot_token=token)
             bot_me = await self._bot_client.get_me()
-            telegram_id = bot_me.id
-            self._bot_client._tg_id = telegram_id
-            self._bot_client.tg_id = telegram_id
-            self._bot_client.heroku_me = bot_me
-            self._bot_client.heroku_me = bot_me
-            self.bot_username = bot_me.username
-            self.bot_id = bot_me.id
         except (
             AccessTokenExpiredError,
             AccessTokenInvalidError,
             AuthKeyUnregisteredError,
         ):
-            logger.critical("Token expired, revoking...")
-            return await self._dp_revoke_token(False)
-        except FloodWaitError as e:
-            logger.error(
-                "Inline bot authorization flood wait: %ss. "
-                "Inline manager initialization skipped for this run.",
-                e.seconds,
-            )
-            self.init_complete = False
+            logger.critical("Bot token is invalid. Restart and enter a valid token.")
+            main.save_config_key("bot_token", "")
+            return False
+        except FloodWaitError as error:
+            logger.error("Inline bot flood wait: %s seconds", error.seconds)
             return False
         except sqlite3.OperationalError:
-            logger.critical(
-                "Bot session database is locked, could not start bot client",
-                exc_info=True,
-            )
-            self.init_complete = False
+            logger.critical("Bot session database is locked", exc_info=True)
             return False
-
-        if self._db.get("heroku.inline", "needs_inline_setup", False):
-            try:
-                await self._configure_inline_bot(self.bot_username)
-            except Exception:
-                pass
-
-            self._db.set("heroku.inline", "needs_inline_setup", False)
-
-        result = await self._ping_bot(after_break)
-        if result is not True:
-            return result
-
-        _folders = await self._client(GetDialogFiltersRequest())
-        for folder in _folders.filters:
-            if getattr(folder, "title", None) == "Heroku":
-                if any(
-                    [
-                        isinstance(peer, InputPeerUser) and peer.user_id == self.bot_id
-                        for peer in folder.include_peer
-                    ]
-                ):
-                    break
-
-                pinned = [await self._client.get_input_entity(self.bot_id)]
-                include = folder.include_peers
-                exclude = folder.exclude_peers
-                emoticon = folder.emoticon
-                color = folder.color
-
-                await self._client(
-                    UpdateDialogFilterRequest(
-                        folder.id,
-                        DialogFilter(
-                            folder.id,
-                            pinned_peers=pinned,
-                            include_peers=include,
-                            exclude_peers=exclude,
-                            emoticon=emoticon,
-                            color=color,
-                        ),
-                    )
-                )
-                break
-
-        self._cleaner_task = asyncio.ensure_future(self._cleaner())
-
-        if self._db.get(main.__name__, "heroku_disabled", False):
-
-
-            self._suspended = False
-            await self.suspend()
-
-    async def _ping_bot(
-        self,
-        after_break: bool = False,
-    ) -> bool:
-        try:
-            await self.bot(
-                SetTypingRequest(self._client.tg_id, SendMessageTypingAction())
-            )
-            return True
-        except UserIsBlockedError:
-            await self._client(UnblockRequest(id=self.bot_id))
-            return True
-        except Exception:
-            pass
-
-        try:
-            m = await self._client.send_message(self.bot_username, "/start heroku init")
-        except (InputUserDeactivatedError, ValueError):
-            main.save_config_key("bot_token", "")
-            self._token = False
-
-            if not after_break:
-                return await self.register_manager(True, force_new_bot=True)
-
-            self.init_complete = False
-            return False
-        except YouBlockedUserError:
-            await self._client(UnblockRequest(id=self.bot_username))
-            try:
-                m = await self._client.send_message(
-                    self.bot_username, "/start heroku init"
-                )
-            except Exception:
-                logger.critical("Can't unblock users bot", exc_info=True)
-                return False
-        except Exception:
-            self.init_complete = False
-            logger.critical("Initialization of inline manager failed!", exc_info=True)
-            return False
-
-        await self._client.delete_messages(self.bot_username, m)
-        return True
-
-    async def _stop(self):
-        if self._task:
-            self._task.cancel()
-        if self._bot_client:
+        if getattr(bot_me, "bot_inline_placeholder", None) is None:
+            logger.critical("Inline mode is disabled for @%s", bot_me.username)
             await self._bot_client.disconnect()
-        if self._cleaner_task:
-            self._cleaner_task.cancel()
-
-    async def _restart_polling(self):
-        return
+            return False
+        self.bot = TelethonBot(self._bot_client)
+        self._bot_client._tg_id = bot_me.id
+        self._bot_client.tg_id = bot_me.id
+        self._bot_client.heroku_me = bot_me
+        self.bot_username = bot_me.username
+        self.bot_id = bot_me.id
+        self._register_builtin_handlers()
+        self._cleaner_task = asyncio.ensure_future(self._cleaner())
+        self.init_complete = True
+        return True
 
     def _attach_custom_handler(
         self,
@@ -524,7 +329,7 @@ class InlineManager(
         exception: Exception = None
 
         async def result_getter():
-            nonlocal unit_id, q
+            nonlocal q
             try:
                 q = await self._client.inline_query(self.bot_username, unit_id)
             except Exception:

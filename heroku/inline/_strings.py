@@ -26,16 +26,13 @@ class _ServiceStrings:
         "command": "Command «{}»",
         "button403": "You are not allowed to press this button!",
         "keep_id": "Do not remove ID! {}",
-        "no_query_results": "<b>Failed to create form</b>\n\nPossible ways to fix the error:\n\n1. Restart Heroku: <code>{prefix}restart</code>\n\n2. Enable inline mode for the bot: go to @BotFather, send /mybots, click Bot Settings -> Inline Mode -> On\n\n3. Create a new bot: send the command <code>{prefix}ch_heroku_bot</code> <@botname>",
+        "no_query_results": "<b>Failed to create form</b>\n\nCheck that the bot token is valid and inline mode is enabled in @BotFather, then restart the service.",
     }
 
     def getkey(self, key: str, **kwargs) -> str:
         return self._S.get(key[len("inline.") :] if key.startswith("inline.") else key, key).format(
             **kwargs
         ) if kwargs else self._S.get(key[len("inline.") :] if key.startswith("inline.") else key, key)
-
-    def getdict(self, key: str, **kwargs) -> dict:
-        return {"en": self.getkey(key, **kwargs)}
 
     def gettext(self, text: str) -> str:
         return self._S.get(text, text)

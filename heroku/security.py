@@ -192,7 +192,11 @@ class SecurityManager:
             except (TypeError, ValueError):
                 allowed = False
 
-            if not allowed:
+            if (
+                not allowed
+                or not isinstance(valid_prefixes[id_], str)
+                or len(valid_prefixes[id_]) != 1
+            ):
                 del valid_prefixes[id_]
 
         if valid_prefixes != prefixes:

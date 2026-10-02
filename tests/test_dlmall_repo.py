@@ -1,5 +1,5 @@
-"""dlm no-args = dlmall: repo -> full.txt -> install all."""
 import asyncio
+import importlib
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -22,7 +22,7 @@ class Resp:
 
 
 async def main():
-    import heroku.main  # noqa: F401
+    importlib.import_module("heroku.main")
     import heroku.utils as u
     import requests as real_requests
     from heroku.Modules.Installer import Installer as InstallerMod
@@ -82,7 +82,7 @@ async def main():
 
     MOD = "code"
 
-    # 1: mixed -> FAILED installed total list
+
     files = {
         "/full.txt": Resp("DlmTest\nBroken\n"),
         "/DlmTest.py": Resp(MOD),
@@ -93,28 +93,27 @@ async def main():
     assert loaded == [f"{REPO}/DlmTest.py", f"{REPO}/Broken.py"], loaded
     assert "FAILED 1 2" in r, r
 
-    # 2: all ok -> DONE n
+
     files = {"/full.txt": Resp("DlmTest\n"), "/DlmTest.py": Resp(MOD)}
     r = await run("", files)
     assert "DONE 1" in r, r
 
-    # 3: repo unset -> ask to set
+
     inst.config = {"modules_repo": ""}
     r = await run("", {"/full.txt": Resp("DlmTest\n")})
     assert r == "SET REPO", r
 
-    # 4: full.txt missing -> NO
+
     inst.config = {"modules_repo": REPO}
     r = await run("", {})
     assert r == "NO", r
 
-    # 5: url arg -> single-module path still works (origin stays default)
     inst.config = {"modules_repo": ""}
     loaded.clear()
     r = await run(f"{REPO}/x.py", {"/x.py": Resp(MOD)})
-    assert loaded == ["<string>"], loaded
+    assert loaded == [f"{REPO}/x.py"], loaded
 
-    # 6: github.com repo url -> raw.githubusercontent fetch
+
     RAW = "https://raw.githubusercontent.com/i-execute/Modules/main"
     files = {f"{RAW}/full.txt": Resp("DlmTest\n"), f"{RAW}/DlmTest.py": Resp(MOD)}
     inst.config = {"modules_repo": "github.com/i-execute/Modules"}

@@ -141,3 +141,6 @@ def safe_getattr(obj, attr, default=None):
         return getattr(obj, attr, default)
     except AttributeError:
         return default
+
+def normalize_prefix(value: typing.Any, default: str = ".") -> str:
+    return value if isinstance(value, str) and len(value) == 1 else default

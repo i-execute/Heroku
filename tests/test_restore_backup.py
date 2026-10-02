@@ -1,5 +1,5 @@
-"""restore: .py from archive + modules by URL from db_mods.json (old-bot backups)."""
 import asyncio
+import importlib
 import io
 import sys
 import zipfile
@@ -14,12 +14,13 @@ import orjson
 def build_backup(tmp: Path, with_db_mods: bool, dead_url: str | None = None) -> bytes:
     mods = io.BytesIO()
     with zipfile.ZipFile(mods, "w") as mz:
-        mz.writestr("FromFile_123.py", b"# mod from archive")
-        mz.writestr("db_mods.json", orjson.dumps({
-            "FromFile": "https://x.invalid/FromFile.py",
-            "ByUrl": "https://x.invalid/ByUrl.py",
-            **({"Dead": dead_url} if dead_url else {}),
-        }))
+        mz.writestr("FromFile_123.py", b"from heroku import loader\nclass FromFile(loader.Module):\n    pass\n")
+        if with_db_mods:
+            mz.writestr("db_mods.json", orjson.dumps({
+                "FromFile": "https://x.invalid/FromFile.py",
+                "ByUrl": "https://x.invalid/ByUrl.py",
+                **({"Dead": dead_url} if dead_url else {}),
+            }))
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as az:
         az.writestr("db.json", orjson.dumps({"heroku.security": {}}))
@@ -28,12 +29,12 @@ def build_backup(tmp: Path, with_db_mods: bool, dead_url: str | None = None) -> 
 
 
 async def run_restore(archive: bytes, loaded_dir: Path, fetches: dict) -> tuple:
-    import heroku.main  # noqa: F401
+    importlib.import_module("heroku.main")
     from heroku import loader, utils
     from heroku.Modules.Backup import Backup
 
     with (
-        patch.object(loader, "LOADED_MODULES_PATH", loaded_dir),
+        patch.object(loader, "MODULES_PATH", loaded_dir),
         patch.object(utils, "run_sync", lambda fn, *a, **kw: _async(fn(*a, **kw))),
     ):
         class R:
@@ -90,22 +91,22 @@ async def run_restore(archive: bytes, loaded_dir: Path, fetches: dict) -> tuple:
 async def main():
     import tempfile
 
-    # 1: happy path — archive file + url module fetched, dead link skipped
+
     d1 = Path(tempfile.mkdtemp())
     files = await run_restore(
         build_backup(d1, True, "https://x.invalid/dead.py"),
         d1,
-        {"https://x.invalid/ByUrl.py": (200, b"# by url")},
+        {"https://x.invalid/ByUrl.py": (200, b"from heroku import loader\nclass ByUrl(loader.Module):\n    pass\n")},
     )
-    assert files == ["ByUrl", "FromFile_123"], files
-    assert (d1 / "ByUrl.py").read_bytes() == b"# by url"
-    assert not (d1 / "FromFile.py").exists(), "file from archive must win over url"
+    assert files == ["ByUrl", "FromFile"], files
+    assert (d1 / "ByUrl.py").read_bytes() == b"from heroku import loader\nclass ByUrl(loader.Module):\n    pass\n"
+    assert (d1 / "FromFile.py").exists(), "file from archive must win over url"
     assert not (d1 / "Dead.py").exists()
 
-    # 2: archive without db_mods.json — old path intact
+
     d2 = Path(tempfile.mkdtemp())
     files = await run_restore(build_backup(d2, False), d2, {})
-    assert files == ["FromFile_123"], files
+    assert files == ["FromFile"], files
 
     print("restore backup E2E OK: 2 cases")
 

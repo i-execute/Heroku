@@ -3,12 +3,28 @@
 
 # (c) Dan Gazizullin, 2021-2023. This file is part of the Hikka Userbot: github.com/hikariatama/Hikka
 
-from .messages import *
-from .rich import *
-from .other import *
-from .entity import *
-from .heroku import *
-from .platform import *
-from .git import *
-from .args import *
-from .placeholders import *
+from importlib import import_module
+
+
+_MODULES = (
+    "messages",
+    "rich",
+    "other",
+    "entity",
+    "heroku",
+    "platform",
+    "git",
+    "args",
+    "placeholders",
+)
+
+for _module_name in _MODULES:
+    _module = import_module(f"{__name__}.{_module_name}")
+    _names = getattr(
+        _module,
+        "__all__",
+        tuple(name for name in vars(_module) if not name.startswith("_")),
+    )
+    globals().update({name: getattr(_module, name) for name in _names})
+
+del _module_name, _module, _names, import_module

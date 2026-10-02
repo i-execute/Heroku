@@ -1,14 +1,3 @@
-"""Telethon-compatible AES-IGE implementations for benchmarking the pure-Python
-fallback path (what telethon.crypto.aes uses when no C crypto is installed).
-Covers cryptg and TgCrypto-pyrofork too, in one file, so all stacks are
-comparable on identical data.
-
-Usage:
-    python3 bench_crypto.py <stack>   # pyaes | cryptg | tgcrypto | goygram
-
-Each stack must run in its own venv with only that package installed
-(goygram needs no extra venv: its crypto is a Rust extension, not a telethon dep).
-"""
 import statistics
 import sys
 import time
@@ -20,7 +9,6 @@ stack = sys.argv[1] if len(sys.argv) > 1 else "pyaes"
 
 
 class IGE:
-    """telethon-style IGE over pyaes.AES blocks (the slow fallback)."""
 
     def __init__(self, key: bytes, iv: bytes):
         import pyaes
@@ -64,24 +52,23 @@ if stack == "pyaes":
 elif stack == "cryptg":
     import cryptg
 
-    enc = lambda d: cryptg.encrypt_ige(d, key, iv)  # noqa: E731
-    dec = lambda d: cryptg.decrypt_ige(d, key, iv)  # noqa: E731
+    enc = lambda d: cryptg.encrypt_ige(d, key, iv)
+    dec = lambda d: cryptg.decrypt_ige(d, key, iv)
 elif stack == "tgcrypto":
     import tgcrypto
 
-    enc = lambda d: tgcrypto.ige256_encrypt(d, key, iv)  # noqa: E731
-    dec = lambda d: tgcrypto.ige256_decrypt(d, key, iv)  # noqa: E731
+    enc = lambda d: tgcrypto.ige256_encrypt(d, key, iv)
+    dec = lambda d: tgcrypto.ige256_decrypt(d, key, iv)
 elif stack == "goygram":
     from goygram.ext import aes_ige_dec, aes_ige_enc
 
-    enc = lambda d: aes_ige_enc(d, key, iv)  # noqa: E731
-    dec = lambda d: aes_ige_dec(d, key, iv)  # noqa: E731
+    enc = lambda d: aes_ige_enc(d, key, iv)
+    dec = lambda d: aes_ige_dec(d, key, iv)
 else:
     sys.exit(f"unknown stack: {stack}")
 
 
 def bench(fn, arg: bytes, n: int = 25) -> float:
-    """Median of n runs, milliseconds."""
     ts = []
     for _ in range(n):
         t = time.perf_counter()
@@ -97,7 +84,7 @@ def mbps(ms: float, nbytes: int) -> float:
 print(f"=== {stack} ===")
 for size, label in [(4096, "4KB"), (1 << 20, "1MB"), (16 << 20, "16MB")]:
     if stack == "pyaes" and size > (1 << 20):
-        continue  # pure python: minutes per run, skip
+        continue
     d = b"\x44" * size
     enc(d)
     ms_e = bench(enc, d)

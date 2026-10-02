@@ -1,5 +1,3 @@
-"""ask() resolves from UpdateBotInlineSend.query as `token value`."""
-
 import asyncio
 import sys
 from pathlib import Path
@@ -25,7 +23,7 @@ async def main():
 
     loop = asyncio.get_running_loop()
 
-    # 1) token + value -> resolves to the value alone
+
     fut = loop.create_future()
     bot = FakeBot()
     bot._ask_state = ("ab12cd34", fut)
@@ -33,23 +31,23 @@ async def main():
     assert fut.done(), "picked article must resolve ask()"
     assert fut.result() == "hunter2", fut.result()
 
-    # 2) value with spaces survives
+
     fut = loop.create_future()
     bot._ask_state = ("tok", fut)
     await BotPM._on_inline_send(bot, FakeUpdate("tok my long pass phrase"))
     assert fut.result() == "my long pass phrase", fut.result()
 
-    # 3) no state -> ignored entirely
+
     bot._ask_state = None
     await BotPM._on_inline_send(bot, FakeUpdate("tok whatever"))
 
-    # 4) token mismatch (someone else's query) must NOT resolve
+
     fut = loop.create_future()
     bot._ask_state = ("tok", fut)
     await BotPM._on_inline_send(bot, FakeUpdate("othertoken secret"))
     assert not fut.done(), "token mismatch must not resolve"
 
-    # 5) token with no value -> not resolved
+
     fut = loop.create_future()
     bot._ask_state = ("tok", fut)
     await BotPM._on_inline_send(bot, FakeUpdate("tok"))

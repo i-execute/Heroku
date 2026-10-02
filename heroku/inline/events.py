@@ -5,12 +5,13 @@
 
 import inspect
 import logging
+import struct
 import typing
 from asyncio import Event
 
-from telethon.tl.types import UpdateBotInlineSend
+from telethon.tl.types import PeerChannel, UpdateBotInlineSend
 
-from .. import main, utils, security
+from .. import utils, security
 from .types import BotInlineCall, InlineCall, InlineQuery, InlineUnit
 
 if typing.TYPE_CHECKING:
@@ -19,23 +20,8 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class Events(InlineUnit):
-    def _dormant_block(self: "InlineManager", user_id: int | None = None) -> bool:
-
-        lifecycle = getattr(self._client, "lifecycle", None)
-
-        if lifecycle is None:
-            return bool(self._db.get(main.__name__, "heroku_disabled", False))
-
-        if not lifecycle.disabled:
-            return False
-
-        return user_id is None or not lifecycle.is_trusted(user_id)
-
     async def _message_handler(self: "InlineManager", message):
         if not message.is_private:
-            return
-
-        if self._dormant_block():
             return
 
         wrapped_message = self._bot_message(message)
@@ -64,8 +50,6 @@ class Events(InlineUnit):
         wrapped_query = InlineQuery(inline_query=inline_query)
         inline_query.inline_manager = self
 
-        if self._dormant_block(wrapped_query.from_user.id):
-            return
         if (
             not self._db.get(security.__name__, "allow_inline_query", False)
             and wrapped_query.from_user.id
@@ -216,9 +200,6 @@ class Events(InlineUnit):
         )
         user_id = call.sender_id
 
-        if self._dormant_block(user_id):
-            return
-
         for func in self._allmodules.callback_handlers.values():
             if await self.check_inline_security(func=func, user=user_id):
                 try:
@@ -334,21 +315,44 @@ class Events(InlineUnit):
             )
             return
 
+    @staticmethod
+    def _inline_message_location(value):
+        owner_id = getattr(value, "owner_id", None)
+        message_id = getattr(value, "id", None)
+        if owner_id is not None and message_id is not None:
+            peer = PeerChannel(-owner_id) if owner_id < 0 else None
+            return peer, message_id
+        if message_id is None:
+            return None
+        try:
+            unpacked_id, peer_id = struct.unpack("<ii", struct.pack("<q", message_id))
+        except (struct.error, OverflowError):
+            return None
+        peer = PeerChannel(-peer_id) if peer_id < 0 else None
+        return peer, unpacked_id
+
+    async def _delete_inline_input_marker(self, value):
+        location = self._inline_message_location(value)
+        if not location:
+            return
+        peer, message_id = location
+        try:
+            message = await self._client.get_messages(peer, ids=message_id)
+            if not message or message.raw_text != "\u2063":
+                return
+            await self._client.delete_messages(peer, [message_id])
+        except Exception:
+            logger.debug("Failed to delete inline input message", exc_info=True)
+
     async def _chosen_inline_handler(
         self: "InlineManager",
         chosen_inline_query,
     ):
         if not isinstance(chosen_inline_query, UpdateBotInlineSend):
             return
-
-        if self._dormant_block(chosen_inline_query.user_id):
-            return
-
         query = chosen_inline_query.query
-
         if not query:
             return
-
         for unit_id, unit in self._units.items():
             if (
                 unit_id == query
@@ -358,10 +362,9 @@ class Events(InlineUnit):
                 unit["inline_message_id"] = chosen_inline_query.msg_id
                 unit["future"].set()
                 return
-
         for unit_id, unit in self._units.copy().items():
             for button in utils.array_sum(unit.get("buttons", [])):
-                if (
+                if not (
                     "_switch_query" in button
                     and "input" in button
                     and button["_switch_query"] == query.split()[0]
@@ -370,53 +373,37 @@ class Events(InlineUnit):
                     + self._client.dispatcher.security._owner
                     + unit.get("always_allow", [])
                 ):
-                    query = query.split(maxsplit=1)[1] if len(query.split()) > 1 else ""
+                    continue
+                value = query.split(maxsplit=1)[1] if len(query.split()) > 1 else ""
 
-                    class ChosenInlineCall:
-                        data = b""
-                        chat_id = None
-                        message_id = None
+                class ChosenInlineCall:
+                    data = b""
+                    chat_id = None
+                    message_id = None
 
-                        def __init__(self, update):
-                            self.id = update.id
-                            self.sender_id = update.user_id
-                            self.query = update
-                            self.query.msg_id = update.msg_id
+                    def __init__(self, update):
+                        self.id = update.id
+                        self.sender_id = update.user_id
+                        self.query = update
+                        self.query.msg_id = update.msg_id
 
-                        async def answer(self, *args, **kwargs):
-                            return None
+                    async def answer(self, *args, **kwargs):
+                        return None
 
-                    try:
-                        result = await button["handler"](
-                            InlineCall(
-                                ChosenInlineCall(chosen_inline_query), self, unit_id
-                            ),
-                            query,
-                            *button.get("args", []),
-                            **button.get("kwargs", {}),
-                        )
-
-
-
-
-                        try:
-                            message_id = getattr(
-                                chosen_inline_query.msg_id,
-                                "id",
-                                chosen_inline_query.msg_id,
-                            )
-                            await self._client.delete_messages(None, [message_id])
-                        except Exception:
-                            logger.debug(
-                                "Failed to delete temporary inline input message",
-                                exc_info=True,
-                            )
-                        return result
-                    except Exception:
-                        logger.exception(
-                            "Exception while running chosen query watcher!"
-                        )
-                        return
+                try:
+                    return await button["handler"](
+                        InlineCall(
+                            ChosenInlineCall(chosen_inline_query), self, unit_id
+                        ),
+                        value,
+                        *button.get("args", []),
+                        **button.get("kwargs", {}),
+                    )
+                except Exception:
+                    logger.exception("Exception while running chosen query watcher")
+                    return
+                finally:
+                    await self._delete_inline_input_marker(chosen_inline_query.msg_id)
 
     async def _query_help(self: "InlineManager", inline_query: InlineQuery):
         _help = []

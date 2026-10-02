@@ -19,7 +19,10 @@ import sys
 import traceback
 from pathlib import Path
 
+from telethon import TelegramClient
 from telethon.errors import (
+    AccessTokenExpiredError,
+    AccessTokenInvalidError,
     ApiIdInvalidError,
     AuthKeyDuplicatedError,
 )
@@ -38,7 +41,6 @@ from ._internal import (
     set_client_id,
 )
 from .dispatcher import CommandDispatcher
-from .lifecycle import LifecycleManager
 from .tl_cache import CustomTelegramClient
 from .version import __version__
 
@@ -409,6 +411,62 @@ class Heroku:
             importlib.invalidate_caches()
             self._get_api_token()
 
+    @staticmethod
+    def _token_shape_valid(token: str) -> bool:
+        if not isinstance(token, str) or ":" not in token:
+            return False
+        bot_id, secret = token.split(":", 1)
+        return bot_id.isdigit() and len(secret) >= 20
+
+    async def _check_bot_token(self, token: str) -> str:
+        if not self._token_shape_valid(token):
+            return "invalid"
+        bot = TelegramClient(
+            MemorySession(),
+            int(self.api_token.ID),
+            self.api_token.HASH,
+            connection=self.conn,
+            proxy=self.proxy,
+            connection_retries=None,
+        )
+        try:
+            await bot.start(bot_token=token)
+            me = await bot.get_me()
+        except (AccessTokenExpiredError, AccessTokenInvalidError):
+            return "invalid"
+        except Exception:
+            logging.exception("Bot token validation failed")
+            return "network"
+        finally:
+            await bot.disconnect()
+        if not me or not me.bot:
+            return "invalid"
+        if getattr(me, "bot_inline_placeholder", None) is None:
+            return "inline"
+        return "ok"
+
+    async def _get_bot_token(self):
+        token = get_config_key("bot_token") or ""
+        while True:
+            if not token:
+                token = (await asyncio.to_thread(input, "Bot token: ")).strip()
+            status = await self._check_bot_token(token)
+            if status == "ok":
+                save_config_key("bot_token", token)
+                return
+            if status == "inline":
+                print("Inline mode is disabled for this bot.")
+                print("Enable inline mode in @BotFather and press Enter to retry.")
+                await asyncio.to_thread(input)
+                continue
+            if status == "network":
+                print("Could not validate the bot token. Check the connection and retry.")
+                await asyncio.to_thread(input, "Press Enter to retry: ")
+                continue
+            print("Invalid bot token.")
+            save_config_key("bot_token", "")
+            token = ""
+
     async def save_client_session(
         self,
         client: CustomTelegramClient,
@@ -451,12 +509,6 @@ class Heroku:
         client.session = session
         client.heroku_db = database.Database(client)
         await client.heroku_db.init()
-
-        try:
-            db = client.heroku_db
-            existing = db.get("heroku.inline", "custom_bot", False)
-        except Exception:
-            existing = False
 
         if delay_restart:
             await client.disconnect()
@@ -510,10 +562,7 @@ class Heroku:
                 temp_db = database.Database(client)
                 await temp_db.init()
 
-                if legacy_token := temp_db.get("heroku.inline", "bot_token", False):
-                    if not get_config_key("bot_token"):
-                        save_config_key("bot_token", legacy_token)
-
+                if temp_db.get("heroku.inline", "bot_token", False):
                     temp_db.set("heroku.inline", "bot_token", None)
 
                 self.clients += [client]
@@ -532,6 +581,10 @@ class Heroku:
                 run_config()
                 return False
             except (AuthKeyUnregisteredError, InteractiveAuthRequired):
+                with contextlib.suppress(Exception):
+                    await client.disconnect()
+                with contextlib.suppress(Exception):
+                    session.close()
                 logging.error(
                     "Session %s was terminated and re-auth is required",
                     session.filename,
@@ -554,7 +607,6 @@ class Heroku:
             me = await client.get_me()
             client._tg_id = me.id
             client.tg_id = me.id
-            client.heroku_me = me
             client.heroku_me = me
             set_client_id(me.id)
 
@@ -605,7 +657,7 @@ class Heroku:
 
                 await client.heroku_inline.bot.send_photo(
                     log_chat_id,
-                    utils.get_asset_path("HerokuStarted.png"),
+                    utils.get_asset_path("Heroku.PNG"),
                     caption=(
                         "{} <b>{} started!</b>\n\n <b>GitHub commit SHA: <a"
                         ' href="https://github.com/i-execute/Heroku/commit/{}">{}</a></b>\n'
@@ -640,14 +692,9 @@ class Heroku:
         modules: loader.Modules,
         db: database.Database,
     ):
-        client.lifecycle = LifecycleManager(client, db)
-
         dispatcher = CommandDispatcher(modules, client, db)
         client.dispatcher = dispatcher
         modules.check_security = dispatcher.check_security
-
-
-
         dispatcher.attach_handlers()
 
     async def amain(self, first: bool, client: CustomTelegramClient):
@@ -657,6 +704,10 @@ class Heroku:
         db = database.Database(client)
         client.heroku_db = db
         await db.init()
+        stored_prefix = db.get(__name__, "command_prefix", ".")
+        client.command_prefix = utils.normalize_prefix(stored_prefix)
+        if client.command_prefix != stored_prefix:
+            db.set(__name__, "command_prefix", client.command_prefix)
         logging.debug("Got DB")
         logging.debug("Loading logging config...")
 
@@ -667,15 +718,12 @@ class Heroku:
 
         await modules.register_all(None)
         modules.send_config()
-        await modules.inline.register_manager()
+        if not await modules.inline.register_manager():
+            return False
         await db.ensure_content_channel()
         await modules.send_ready()
 
-
-
-        dormant = await client.lifecycle.apply_startup_state()
-
-        if first and not dormant:
+        if first:
             await self._badge(client)
 
         await client.run_until_disconnected()
@@ -709,6 +757,7 @@ class Heroku:
 
     async def _main(self):
         await self._get_token()
+        await self._get_bot_token()
 
         if (
             not self.clients and not self.sessions or not await self._init_clients()
@@ -722,18 +771,15 @@ class Heroku:
 
     async def _shutdown_handler(self):
         for client in self.clients:
-            inline = getattr(client.loader, "inline", None)
+            inline = getattr(getattr(client, "loader", None), "inline", None)
             if inline:
-                for t in (inline._task, inline._cleaner_task):
-                    if t:
-                        t.cancel()
-                try:
-                    await inline._dp.stop_polling()
-                    await inline.bot.session.close()
-                except Exception:
-                    pass
-        for c in self.clients:
-            await c.disconnect()
+                if inline._cleaner_task:
+                    inline._cleaner_task.cancel()
+                if inline._bot_client:
+                    with contextlib.suppress(Exception):
+                        await inline._bot_client.disconnect()
+        for client in self.clients:
+            await client.disconnect()
         for task in asyncio.all_tasks():
             if task is not asyncio.current_task():
                 task.cancel()
@@ -748,7 +794,7 @@ class Heroku:
             except NotImplementedError:
                 logging.warning("Signal handlers not supported on this platform.")
         else:
-            logging.info("Running on Windows — skipping signal handler.")
+            logging.info("Running on Windows - skipping signal handler.")
 
         try:
             self.loop.run_until_complete(self._main())

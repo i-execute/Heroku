@@ -41,6 +41,7 @@ __all__ = [
     "ListLike",
     "Command",
     "StringLoader",
+    "Strings",
     "Module",
     "get_commands",
     "get_inline_handlers",
@@ -61,6 +62,27 @@ logger = logging.getLogger(__name__)
 JSONSerializable = typing.Union[str, int, float, bool, list, dict, None]
 ListLike = typing.Union[list, set, tuple]
 Command = typing.Callable[..., typing.Awaitable[typing.Any]]
+
+class Strings:
+    def __init__(self, module: typing.Any):
+        source = module.strings
+        self._strings = dict(source) if isinstance(source, dict) else {}
+
+    def __getitem__(self, key: str) -> str:
+        return self._strings.get(key, f"Unknown string: {key}")
+
+    def get(self, key: str, default: typing.Any = None) -> typing.Any:
+        return self._strings.get(key, default)
+
+    def __call__(self, key: str, _: typing.Any = None) -> str:
+        return self[key]
+
+    def __iter__(self):
+        return iter(self._strings)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._strings
+
 
 class StringLoader(SourceLoader):
     def __init__(self, data: str, origin: str):
@@ -92,14 +114,6 @@ class Module:
 
         pass
 
-    async def on_disable(self):
-
-        pass
-
-    async def on_enable(self):
-
-        pass
-
     def internal_init(self):
         self.allmodules: "Modules"
 
@@ -111,7 +125,6 @@ class Module:
         self.get_prefix = self.allmodules.get_prefix
         self.get_prefixes = self.allmodules.get_prefixes
         self.inline = self.allmodules.inline
-        self.lifecycle = getattr(self._client, "lifecycle", None)
         self.tg_id: int = self._client.tg_id
         self._tg_id: int = self._client.tg_id
 

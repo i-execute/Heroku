@@ -1,108 +1,93 @@
-<p align="center">
-  <a href="https://t.me/I_execute"><img src="https://img.shields.io/badge/Telegram-@I__execute-26A5E4?style=flat&logo=telegram&logoColor=white" alt="Telegram" /></a>
-</p>
+# Heroku Userbot
 
-# Heroku personal fork
+Heroku is a modular Telegram userbot based on Telethon.
 
-Telegram userbot on Telethon without backdoors.
+## Requirements
 
-## Install
+- Python 3.11 or newer
+- A Telegram API ID and API hash from `my.telegram.org`
+- A Telegram bot created by the user
+- Inline mode enabled for that bot
+- Git and a supported Linux environment
 
-On first start: create bot and turn on inline mode with 100% feedback then API ID/hash from https://my.telegram.org
+The project does not create bots, search BotFather chats, revoke tokens, configure avatars, or enable inline mode automatically.
+
+## Installation
 
 ```bash
-cd ~
-git clone https://github.com/i-execute/Heroku
+git clone https://github.com/i-execute/Heroku.git
 cd Heroku
 python3 -m venv venv
-source venv/bin/activate
-pip install -r Storage/requirements.txt
+. venv/bin/activate
+python3 -m pip install -r Storage/requirements.txt
 python3 -m heroku
 ```
 
-Then login via your bot by QR code or manually and continue installation:
+On startup, enter the API credentials and bot token in the terminal. The token is checked by Telegram before it is saved. Startup also verifies that inline mode is enabled.
 
-### systemd (user):
+Open the supplied bot and follow the setup prompts. Authorization can be completed with either a QR code or a phone number, login code, and 2FA password. Inline input marker messages are deleted through the authorized user account.
+
+## Running as a service
+
+Create a user service and adjust the paths if the repository is installed elsewhere:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/heroku.service << EOF
+cat > ~/.config/systemd/user/heroku.service <<'EOF'
 [Unit]
 Description=Heroku Userbot
-After=network.target
+After=network-online.target
 
 [Service]
-WorkingDirectory=$HOME/Heroku
-ExecStart=$HOME/Heroku/venv/bin/python3 -m heroku
+WorkingDirectory=%h/Heroku
+ExecStart=%h/Heroku/venv/bin/python3 -m heroku
 Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=default.target
 EOF
-
 systemctl --user daemon-reload
-systemctl --user enable --now heroku
+systemctl --user enable --now heroku.service
 ```
 
-### root:
+## Updating
+
+There is no automatic updater. Update the repository and restart the process or service manually:
 
 ```bash
-cat > /etc/systemd/system/heroku.service << EOF
-[Unit]
-Description=Heroku Userbot
-After=network.target
-
-[Service]
-WorkingDirectory=/root/Heroku
-ExecStart=/root/Heroku/venv/bin/python3 -m heroku
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable --now heroku
+git pull --ff-only
+sudo systemctl restart heroku.service
 ```
 
-## Update
+## Removal
+
+Run the removal script from the repository:
 
 ```bash
-git pull
+bash Storage/Nuke.sh
 ```
 
-Or `.update` from Telegram
+The script validates its installation path, removes the matching systemd unit, removes the repository, and stops the running userbot process when applicable.
 
-## Differences from upstream
+## Backups
 
-- Telethon 1.45 instead of herokutl; no patchers, no unix-socket proxy layer
-- Single client; no Docker, install scripts, QR login, banners
-- JSON langpacks: English, Russian, Chinese
-- `.dlm` loads files only, no URLs; Loader renamed to Installer
-- Manual `.update` only; no comments in code
-
-## Crypto
-
-Upstream shipped `TgCrypto-pyrofork` in requirements — a package neither Telethon nor herokutl ever imports. Without `cryptg`, everything silently falls back to pure-Python pyaes: **3.1 s** for 16 MB of AES-IGE. Replaced with `cryptg` (written by Telethon's author).
-
-| Stack | 4KB | 1MB | 16MB |
-|---|---|---|---|
-| GoyGram (Rust, AES-NI) | 0.004 ms | 3.0 ms | 62 ms |
-| **cryptg (used here)** | 0.010 ms | 4.5 ms | 88 ms |
-| TgCrypto-pyrofork (upstream) | 0.016 ms | 7.1 ms | 151 ms |
-| pyaes (fallback) | 16.6 ms | 3497 ms | — |
-
-Benchmark: `tests/bench_crypto.py`. All stacks produce byte-identical ciphertext.
+A full database and module backup is sent immediately after startup and then every hour. Backups exclude only `heroku.inline.bot_token`. Keys named `bot_token` that belong to other modules remain unchanged. The terminal token is never restored or migrated from a backup.
 
 ## Tests
 
 ```bash
-python3 tests/test_dlm_lifecycle.py
-python3 tests/bench_crypto.py cryptg
+python3 tests/test_botpm_ask.py
+python3 tests/test_botpm_article_shape.py
+python3 tests/test_bot_token_backup.py
+python3 tests/test_inline_marker_cleanup.py
+python3 tests/test_module_persistence.py
+python3 tests/test_dlmall_repo.py
+python3 tests/test_restore_backup.py
+python3 tests/test_telethon_preview.py
+python3 tests/test_refactor_contract.py
 ```
 
 ## License
 
-AGPLv3
+This project is distributed under the GNU Affero General Public License v3.0. See `LICENSE` for details.

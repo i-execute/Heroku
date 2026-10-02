@@ -59,7 +59,7 @@ def _text(value) -> str:
     if name in {"TextHashtag", "TextCashtag", "TextBotCommand", "TextBankCard"}:
         return _text(getattr(value, "text", None))
     if name == "TextCustomEmoji":
-        return _escape(getattr(value, "alt", ""))
+        return f'<tg-emoji emoji-id={_attribute(getattr(value, "document_id", ""))}>{_escape(getattr(value, "alt", ""))}</tg-emoji>'
     if name == "TextImage":
         return f'<i>[image:{_attribute(getattr(value, "document_id", ""))}]</i>'
     if name == "TextMath":

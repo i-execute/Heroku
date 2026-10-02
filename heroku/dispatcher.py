@@ -11,7 +11,6 @@ import logging
 from collections.abc import Callable
 import re
 import sys
-import time
 import traceback
 import typing
 
@@ -22,25 +21,12 @@ from telethon.tl.types import Message
 from . import main, security, utils
 from ._internal import tag_client_id
 from .database import Database
-from .lifecycle import LifecycleManager
 from .loader import Modules
 from .tl_cache import CustomTelegramClient
 
 logger = logging.getLogger(__name__)
 
-_LAYOUT_TRANSLATION = str.maketrans(
-    'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,'
-    + "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~@#$%^&QWERTYUIOP{}ASDFGHJKL:\"|ZXCVBNM<>?",
-    "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~@#$%^&QWERTYUIOP{}ASDFGHJKL:\"|ZXCVBNM<>?"
-    + 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,',
-)
 
-
-
-DORMANT_COMMANDS = frozenset({"enable"})
-
-
-DORMANT_CONSUMED_TTL = 10.0
 
 ALL_TAGS = [
     "no_commands",
@@ -111,11 +97,6 @@ class CommandDispatcher:
 
         self.security = security.SecurityManager(client, db)
 
-        self.lifecycle: LifecycleManager = getattr(
-            client, "lifecycle", None
-        ) or LifecycleManager(client, db)
-        client.lifecycle = self.lifecycle
-
         self.check_security = self.security.check
         self._me = self._client.heroku_me.id
         self._cached_usernames = set()
@@ -138,14 +119,11 @@ class CommandDispatcher:
         self._pending_tasks: set[asyncio.Task] = set()
 
 
-        self._saved_handlers: list[tuple[Callable, typing.Any]] = []
-        self._dormant_handler: tuple[Callable, typing.Any] | None = None
 
 
 
 
 
-        self._consumed_messages: collections.deque = collections.deque(maxlen=64)
 
 
 
@@ -156,11 +134,6 @@ class CommandDispatcher:
 
         return self._pending_tasks
 
-    @property
-    def dormant(self) -> bool:
-
-        return self._dormant_handler is not None
-
     def _default_handlers(self) -> list[tuple[Callable, typing.Any]]:
         return [
             (self.handle_incoming, events.NewMessage()),
@@ -170,209 +143,14 @@ class CommandDispatcher:
             (self.handle_raw, events.Raw()),
         ]
 
-    @staticmethod
-    def _message_key(message: Message) -> tuple[int, int]:
-        try:
-            chat_id = utils.get_chat_id(message)
-        except Exception:
-            chat_id = getattr(message, "chat_id", 0) or 0
-
-        return (chat_id, getattr(message, "id", 0) or 0)
-
-    def _consume_message(self, message: Message):
-
-        self._consumed_messages.append((self._message_key(message), time.time()))
-
-    def _is_consumed(self, message: Message) -> bool:
-        if not self._consumed_messages:
-            return False
-
-        key = self._message_key(message)
-        now = time.time()
-
-        return any(
-            consumed == key and now - timestamp < DORMANT_CONSUMED_TTL
-            for consumed, timestamp in self._consumed_messages
-        )
-
     def _track(self, task: asyncio.Task) -> asyncio.Task:
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
         return task
 
     def attach_handlers(self):
-
-        if self.lifecycle.disabled:
-            self.enter_dormant()
-            return
-
         for callback, builder in self._default_handlers():
             self._client.add_event_handler(callback, builder)
-
-    def enter_dormant(self) -> int:
-
-        if self.dormant:
-            return 0
-
-        saved = [
-            (callback, builder)
-            for callback, builder in self._client.list_event_handlers()
-        ]
-
-        for callback in {callback for callback, _ in saved}:
-            with contextlib.suppress(Exception):
-                self._client.remove_event_handler(callback)
-
-        self._saved_handlers = saved
-
-        builder = events.NewMessage()
-        self._client.add_event_handler(self.handle_dormant, builder)
-        self._dormant_handler = (self.handle_dormant, builder)
-
-        logger.debug(
-            "Dispatcher is dormant now: %s handlers detached, watching for"
-            " `enable` only",
-            len(saved),
-        )
-
-        return len(saved)
-
-    def leave_dormant(self) -> int:
-
-        if self._dormant_handler:
-            callback, _ = self._dormant_handler
-            with contextlib.suppress(Exception):
-                self._client.remove_event_handler(callback)
-
-            self._dormant_handler = None
-
-        restored = self._saved_handlers or self._default_handlers()
-        self._saved_handlers = []
-
-        for callback, builder in restored:
-            self._client.add_event_handler(callback, builder)
-
-        logger.debug("Dispatcher is alive again: %s handlers restored", len(restored))
-
-        return len(restored)
-
-    def _resolve_prefix(self, initiator: int) -> str:
-        main_prefix = self._db.get(main.__name__, "command_prefix", ".")
-
-        if initiator == self._client.tg_id:
-            return main_prefix
-
-        return self._db.get(main.__name__, "command_prefixes", {}).get(
-            str(initiator),
-            main_prefix,
-        )
-
-    def _dormant_command_names(self) -> set[str]:
-        names = set(DORMANT_COMMANDS)
-
-        aliases = getattr(self._modules, "aliases", None) or {}
-        with contextlib.suppress(Exception):
-            names |= {
-                alias.lower()
-                for alias, command in aliases.items()
-                if command.split(maxsplit=1)[0].lower() in DORMANT_COMMANDS
-            }
-
-        return names
-
-    def _is_dormant_command(self, text: str, initiator: int) -> bool:
-
-        if not isinstance(text, str) or not text.strip():
-            return False
-
-        prefix = self._resolve_prefix(initiator)
-        allowed = self._dormant_command_names()
-
-        variants = {text}
-        with contextlib.suppress(Exception):
-            variants.add(str.translate(text, _LAYOUT_TRANSLATION))
-
-        for variant in variants:
-            variant = variant.strip()
-
-            if not prefix or not variant.startswith(prefix):
-                continue
-
-            body = variant[len(prefix) :].strip()
-            if not body:
-                continue
-
-            command = body.split(maxsplit=1)[0]
-            tag = command.split("@", maxsplit=1)
-
-            if (
-                len(tag) == 2
-                and tag[1].lower() != "me"
-                and tag[1].lower() not in self._cached_usernames
-            ):
-                continue
-
-            if tag[0].lower() in allowed:
-                return True
-
-        return False
-
-    @tag_client_id("client.tg_id")
-    async def handle_dormant(self, event: events.NewMessage):
-
-        if not self.lifecycle.disabled:
-            return
-
-        message = getattr(event, "message", None)
-        if message is None or not isinstance(getattr(message, "message", None), str):
-            return
-
-        initiator = (
-            self._client.tg_id
-            if getattr(message, "out", False)
-            else (getattr(event, "sender_id", 0) or getattr(message, "sender_id", 0))
-        )
-
-        if not self.lifecycle.is_trusted(initiator):
-            return
-
-        if not self._is_dormant_command(message.message, initiator):
-            return
-
-        if self._is_consumed(message):
-            return
-
-        self._consume_message(message)
-
-        logger.info("Got `enable` from %s while dormant", initiator)
-
-        try:
-            report = await self.lifecycle.enable(initiator=initiator)
-        except Exception:
-            logger.exception("Failed to enable userbot")
-            with contextlib.suppress(Exception):
-                await utils.answer(
-                    message,
-                    self.lifecycle.string(
-                        "enable_failed",
-                        "<b>Failed to enable userbot. Check logs.</b>",
-                    ),
-                )
-            return
-
-        with contextlib.suppress(Exception):
-            await utils.answer(
-                message,
-                self.lifecycle.string(
-                    "enabled",
-                    "<b>Userbot enabled.</b>",
-                    **report.as_dict,
-                ),
-            )
-
-
-
-        raise events.StopPropagation
 
     async def _handle_ratelimit(self, message: Message, func: Callable) -> bool:
         if await self.security.check(message, security.OWNER):
@@ -450,7 +228,6 @@ class CommandDispatcher:
         old_respond = message.respond
 
         def process_text(text: str) -> str:
-            nonlocal grep, ungrep
             res = []
 
             for line in text.split("\n"):
@@ -514,25 +291,17 @@ class CommandDispatcher:
 
         initiator = getattr(event, "sender_id", 0)
 
-        if self.lifecycle.disabled:
-
-
-
-            if not self.lifecycle.is_trusted(initiator) or not self._is_dormant_command(
-                event.message.message,
-                initiator,
-            ):
-                return False
-
-        if self._is_consumed(event.message):
-            return False
-
-        main_prefix = self._db.get(main.__name__, "command_prefix", ".")
+        stored_prefix = self._db.get(main.__name__, "command_prefix", ".")
+        main_prefix = utils.normalize_prefix(stored_prefix)
+        if main_prefix != stored_prefix:
+            self._db.set(main.__name__, "command_prefix", main_prefix)
         if initiator == self._client.tg_id:
             prefix = main_prefix
         else:
             prefix = self._db.get(main.__name__, "command_prefixes", {})
-            prefix = prefix.get(str(initiator), main_prefix)
+            prefix = utils.normalize_prefix(
+                prefix.get(str(initiator)), main_prefix
+            )
 
         message = utils.censor(event.message)
 
@@ -564,18 +333,9 @@ class CommandDispatcher:
                     )
                 return False
 
-        _translated_prefix = str.translate(prefix, _LAYOUT_TRANSLATION)
-        _switch_layout = (
-            _translated_prefix != prefix
-            and event.message.message.startswith(_translated_prefix)
-        )
-        if not _switch_layout and not event.message.message.startswith(prefix):
+        if not event.message.message.startswith(prefix):
             return False
-        _msg = (
-            str.translate(message.message, _LAYOUT_TRANSLATION)
-            if _switch_layout
-            else message.message
-        )
+        _msg = message.message
 
         if (
             event.sticker
@@ -685,9 +445,6 @@ class CommandDispatcher:
         return message, prefix, txt, func
 
     async def handle_raw(self, event: events.Raw):
-        if self.lifecycle.disabled:
-            return
-
         for handler in self.raw_handlers:
             if isinstance(event, tuple(handler.updates)):
                 try:
@@ -876,9 +633,6 @@ class CommandDispatcher:
         self,
         event: events.NewMessage | events.MessageDeleted,
     ):
-
-        if self.lifecycle.disabled:
-            return
         message = utils.censor(getattr(event, "message", event))
 
         blacklist_chats = self._db.get(main.__name__, "blacklist_chats", [])

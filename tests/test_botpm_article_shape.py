@@ -1,39 +1,45 @@
-"""_on_iq builds the article exactly the way InlineBuilder accepts it."""
-
 import asyncio
+import hashlib
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-
 class Article:
-    def __init__(self, title, description, id):
+    def __init__(self, title, description, article_id, text):
         self.title = title
         self.description = description
-        self.id = id
+        self.id = article_id
+        self.text = text
 
 
 class FakeBuilder:
-    """Records how the article() call is shaped."""
-
-    async def article(self, title, description=None, *, id=None, text=None, parse_mode=(), **kw):
-        return Article(title, description, id)
+    async def article(
+        self,
+        title,
+        description=None,
+        *,
+        id=None,
+        text=None,
+        parse_mode=(),
+        **kwargs,
+    ):
+        return Article(title, description, id, text)
 
 
 class FakeEvent:
     def __init__(self, query_text, user_id=222):
-        class Q:
+        class Query:
             pass
 
-        q = Q()
-        q.user_id = user_id
-        self.query = q
+        query = Query()
+        query.user_id = user_id
+        self.query = query
         self.text = query_text
         self.builder = FakeBuilder()
 
-    async def answer(self, results, **kw):
+    async def answer(self, results, **kwargs):
         self.answered = results
 
 
@@ -46,21 +52,22 @@ class FakeBot:
 async def main():
     from heroku.botpm import BotPM
 
-    # token + value -> article id must be the WHOLE query
     bot = FakeBot()
-    fut = asyncio.get_running_loop().create_future()
-    bot._ask_state = ("ab12cd34", fut)
-    ev = FakeEvent("ab12cd34 hunter2")
-    await BotPM._on_iq(bot, ev)
-    assert ev.answered[0].id == "ab12cd34 hunter2", ev.answered[0].id
+    future = asyncio.get_running_loop().create_future()
+    bot._ask_state = ("ab12cd34", future, "Enter password", "🔐")
+    event = FakeEvent("ab12cd34 hunter2")
+    await BotPM._on_iq(bot, event)
+    article = event.answered[0]
+    assert article.id == hashlib.sha256(b"ab12cd34 hunter2").hexdigest()
+    assert "hunter2" not in article.id
+    assert article.title == "Enter password"
+    assert article.description == "Enter password"
+    assert article.text == "🔐"
 
-    # bare token -> still answered (empty value); foreign token -> not answered
-    ev2 = FakeEvent("othertok whatever")
-    bot._ask_state = ("ab12cd34", fut)
-    await BotPM._on_iq(bot, ev2)
-    assert not hasattr(ev2, "answered"), "foreign token must not answer"
-
-    print("article() shape OK")
+    foreign = FakeEvent("othertok whatever")
+    bot._ask_state = ("ab12cd34", future, "Enter phone", "📝")
+    await BotPM._on_iq(bot, foreign)
+    assert not hasattr(foreign, "answered")
 
 
 if __name__ == "__main__":
