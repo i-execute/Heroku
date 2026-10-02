@@ -618,13 +618,30 @@ class Modules:
                 if "strings" in name.lower() and (result := mapping(value)) is not None
             }
 
-        variants = candidates(own_values) or candidates(inherited_values)
-        priorities = ("strings_en", "strings_ru", "strings")
-        for preferred in priorities:
-            for name, value in variants.items():
-                if name.lower() == preferred:
-                    return value
-        return next(iter(variants.values()), {})
+        variants = candidates(own_values)
+        if not variants:
+            variants = candidates(inherited_values)
+        def priority(name: str) -> int:
+            normalized = name.lower().replace("-", "_")
+            parts = normalized.split("_")
+            if normalized == "strings":
+                return 0
+            if "en" in parts or "english" in normalized:
+                return 1
+            if "ru" in parts or "russian" in normalized:
+                return 2
+            return 3
+
+        selected = dict(
+            min(
+                variants.items(),
+                key=lambda item: priority(item[0]),
+                default=("", {}),
+            )[1]
+        )
+        if not selected.get("name"):
+            selected["name"] = module.__class__.__name__
+        return selected
 
     @tag_client_id("client.tg_id")
     async def register_module(
