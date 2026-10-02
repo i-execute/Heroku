@@ -19,19 +19,17 @@ import sys
 import traceback
 from pathlib import Path
 
-from telethon import TelegramClient
+import aiohttp
+
 from telethon.errors import (
-    AccessTokenExpiredError,
-    AccessTokenInvalidError,
     ApiIdInvalidError,
     AuthKeyDuplicatedError,
-    FloodWaitError,
 )
 from telethon.errors.rpcerrorlist import AuthKeyUnregisteredError
 from telethon.network.connection import (
     ConnectionTcpFull,
 )
-from telethon.sessions import MemorySession, SQLiteSession
+from telethon.sessions import SQLiteSession
 
 from . import database, loader, utils, version
 from ._internal import (
@@ -422,34 +420,26 @@ class Heroku:
     async def _check_bot_token(self, token: str) -> str:
         if not self._token_shape_valid(token):
             return "invalid"
-        bot = TelegramClient(
-            MemorySession(),
-            int(self.api_token.ID),
-            self.api_token.HASH,
-            connection=self.conn,
-            proxy=self.proxy,
-            connection_retries=None,
-        )
+        timeout = aiohttp.ClientTimeout(total=20)
         try:
-            await bot.start(bot_token=token)
-            me = await bot.get_me()
-        except (AccessTokenExpiredError, AccessTokenInvalidError):
-            return "invalid"
-        except FloodWaitError as error:
-            self._bot_token_flood_wait = max(int(error.seconds), 1)
-            logging.warning(
-                "Bot token validation suspended for %d seconds by Telegram",
-                self._bot_token_flood_wait,
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(
+                    f"https://api.telegram.org/bot{token}/getMe"
+                ) as response:
+                    payload = await response.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+            logging.error(
+                "Bot token validation request failed: %s",
+                type(error).__name__,
             )
-            return "flood"
-        except Exception:
-            logging.exception("Bot token validation failed")
             return "network"
-        finally:
-            await bot.disconnect()
-        if not me or not me.bot:
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            error_code = payload.get("error_code") if isinstance(payload, dict) else None
+            return "invalid" if error_code in {401, 404} else "network"
+        bot = payload.get("result")
+        if not isinstance(bot, dict) or not bot.get("is_bot"):
             return "invalid"
-        if getattr(me, "bot_inline_placeholder", None) is None:
+        if bot.get("supports_inline_queries") is not True:
             return "inline"
         return "ok"
 
@@ -475,11 +465,6 @@ class Heroku:
             if status == "ok":
                 save_config_key("bot_token", token)
                 return
-            if status == "flood":
-                delay = getattr(self, "_bot_token_flood_wait", 60) + 1
-                logging.warning("Bot token validation will retry in %d seconds", delay)
-                await asyncio.sleep(delay)
-                continue
             if status == "inline":
                 print("Inline mode is disabled for this bot.")
                 entered = await self._terminal_input(
@@ -840,7 +825,7 @@ class Heroku:
         except Exception as e:
             logging.exception("Unexpected exception in main loop: %s", e)
         finally:
-            logging.info("Loop terminated")
+            logging.info("Heroku terminated")
             try:
                 self.loop.run_until_complete(self._shutdown_handler())
             except Exception:

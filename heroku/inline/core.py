@@ -219,23 +219,27 @@ class InlineManager(
             self._client.api_hash,
             receive_updates=True,
         )
-        try:
-            await self._bot_client.start(bot_token=token)
-            bot_me = await self._bot_client.get_me()
-        except (
-            AccessTokenExpiredError,
-            AccessTokenInvalidError,
-            AuthKeyUnregisteredError,
-        ):
-            logger.critical("Bot token is invalid. Restart and enter a valid token.")
-            main.save_config_key("bot_token", "")
-            return False
-        except FloodWaitError as error:
-            logger.error("Inline bot flood wait: %s seconds", error.seconds)
-            return False
-        except sqlite3.OperationalError:
-            logger.critical("Bot session database is locked", exc_info=True)
-            return False
+        while True:
+            try:
+                await self._bot_client.start(bot_token=token)
+                bot_me = await self._bot_client.get_me()
+                break
+            except (
+                AccessTokenExpiredError,
+                AccessTokenInvalidError,
+                AuthKeyUnregisteredError,
+            ):
+                logger.critical("Bot token is invalid. Restart and enter a valid token.")
+                main.save_config_key("bot_token", "")
+                return False
+            except FloodWaitError as error:
+                delay = max(int(error.seconds), 1) + 1
+                logger.warning("Inline bot authorization will retry in %s seconds", delay)
+                await self._bot_client.disconnect()
+                await asyncio.sleep(delay)
+            except sqlite3.OperationalError:
+                logger.critical("Bot session database is locked", exc_info=True)
+                return False
         if getattr(bot_me, "bot_inline_placeholder", None) is None:
             logger.critical("Inline mode is disabled for @%s", bot_me.username)
             await self._bot_client.disconnect()
