@@ -3,13 +3,11 @@ import contextlib
 import io
 import logging
 import os
-import struct
 
 import qrcode
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import MemorySession, SQLiteSession
-from telethon.tl.types import PeerChannel
 
 from . import main as heroku_main
 from .botpm import BotPM
@@ -27,31 +25,25 @@ def _qr_bytes(url: str) -> bytes:
     return buffer.getvalue()
 
 
-def _inline_location(value):
-    owner_id = getattr(value, "owner_id", None)
-    message_id = getattr(value, "id", None)
-    if owner_id is not None and message_id is not None:
-        peer = PeerChannel(-owner_id) if owner_id < 0 else None
-        return peer, message_id
-    if message_id is None:
-        return None
-    try:
-        unpacked_id, peer_id = struct.unpack("<ii", struct.pack("<q", message_id))
-    except (struct.error, OverflowError):
-        return None
-    peer = PeerChannel(-peer_id) if peer_id < 0 else None
-    return peer, unpacked_id
-
-
 async def _delete_inline_messages(client, bot: BotPM):
-    for value in bot.inline_messages:
-        location = _inline_location(value)
-        if not location:
-            continue
-        peer, message_id = location
-        with contextlib.suppress(Exception):
-            await client.delete_messages(peer, [message_id])
-    bot.inline_messages.clear()
+    if not bot.username or not bot.bot_id:
+        return
+    try:
+        messages = await client.get_messages(bot.username, limit=100)
+    except Exception:
+        logger.debug("Failed to load registration input messages", exc_info=True)
+        return
+    message_ids = [
+        message.id
+        for message in messages
+        if getattr(message, "out", False)
+        and getattr(message, "via_bot_id", None) == bot.bot_id
+        and getattr(message, "raw_text", None) in {"📝", "🔐", "\u2063"}
+    ]
+    if not message_ids:
+        return
+    with contextlib.suppress(Exception):
+        await client.delete_messages(bot.username, message_ids)
 
 
 async def _save_session(client, me) -> None:

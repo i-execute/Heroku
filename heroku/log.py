@@ -215,8 +215,8 @@ class TelegramLogsHandler(logging.Handler):
         self._mod = None
         self.tg_buff = []
         self.force_send_all = False
-        self.tg_level = 40
-        self.ignore_common = True
+        self.tg_level = logging.INFO
+        self.ignore_common = False
         self.targets = targets
         self.capacity = capacity
         self.lvl = logging.NOTSET
@@ -240,7 +240,7 @@ class TelegramLogsHandler(logging.Handler):
         self.lvl = level
 
     def _min_tg_level(self) -> int:
-        return self.tg_level
+        return min(self.tg_level, logging.INFO)
 
     def _common_ignored(self) -> bool:
         return self.ignore_common
@@ -248,13 +248,18 @@ class TelegramLogsHandler(logging.Handler):
     def _receives(self, item: tuple) -> bool:
         _, caller, levelno, common = item
 
-        if levelno < self.tg_level:
+        if levelno < self._min_tg_level():
             return False
 
         if common and self.ignore_common:
             return False
 
-        return caller is None or self.force_send_all
+        return (
+            caller is None
+            or self.force_send_all
+            or self._mod is not None
+            and caller == getattr(self._mod, "tg_id", None)
+        )
 
     def dump(self):
         return self.handledbuffer + self.buffer
@@ -457,7 +462,16 @@ class TelegramLogsHandler(logging.Handler):
 
                 common = any(field in exc.message for field in COMMON_ERRORS)
 
-                if not common or not self._common_ignored():
+                if common and self._common_ignored():
+                    self.tg_buff += [
+                        (
+                            _tg_formatter.format(record),
+                            caller,
+                            record.levelno,
+                            False,
+                        )
+                    ]
+                else:
                     self.tg_buff += [(exc, caller, record.levelno, common)]
             else:
                 self.tg_buff += [

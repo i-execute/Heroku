@@ -22,16 +22,23 @@ class BotPM:
         self._ask_state: tuple | None = None
         self._choice_state: asyncio.Future | None = None
         self._qr_msg = None
-        self.inline_messages = []
+        self.bot_id: int | None = None
+        self.username: str | None = None
 
     async def start(self):
         await self.client.start(bot_token=self.token)
+        me = await self.client.get_me()
+        self.bot_id = me.id
+        self.username = me.username
         self.client.add_event_handler(self._on_iq, events.InlineQuery())
         self.client.add_event_handler(self._on_callback, events.CallbackQuery())
         self.client.add_event_handler(
             self._on_inline_send, events.Raw(types=UpdateBotInlineSend)
         )
-        return await self.client.get_me()
+        self.client.add_event_handler(
+            self._on_input_marker, events.NewMessage(incoming=True)
+        )
+        return me
 
     async def _on_iq(self, event):
         state = self._ask_state
@@ -69,9 +76,23 @@ class BotPM:
         parts = query.split(maxsplit=1)
         if len(parts) < 2 or parts[0] != token:
             return
-        if getattr(update, "msg_id", None) is not None:
-            self.inline_messages.append(update.msg_id)
         fut.set_result(parts[1])
+
+    async def _on_input_marker(self, event):
+        message = event.message
+        if (
+            self.owner_id
+            and event.sender_id != self.owner_id
+            or getattr(message, "via_bot_id", None) != self.bot_id
+            or getattr(message, "raw_text", None) not in {"📝", "🔐"}
+        ):
+            return
+        state = self._ask_state
+        if state:
+            with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(state[1]), timeout=10)
+        with contextlib.suppress(Exception):
+            await event.delete()
 
     async def _on_callback(self, event):
         if not self._choice_state or self._choice_state.done():

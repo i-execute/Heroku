@@ -139,6 +139,8 @@ class InlineManager(
 
         self._bot_update_handlers: dict[str, tuple[str, typing.Callable]] = {}
         self._bot_handler_refs: dict[str, tuple[typing.Callable, object]] = {}
+        self._input_marker_event = None
+        self._input_marker_events = asyncio.Queue()
 
     async def _cleaner(self):
         while True:
@@ -170,6 +172,13 @@ class InlineManager(
             self._chosen_inline_handler, events.Raw(types=UpdateBotInlineSend)
         )
         self._register_bot_handler(self._message_handler, events.NewMessage())
+
+        if self._input_marker_event is None:
+            self._input_marker_event = events.NewMessage(outgoing=True)
+            self._client.add_event_handler(
+                self._inline_input_marker_handler,
+                self._input_marker_event,
+            )
 
         for handler_id, (update_type, handler) in self._bot_update_handlers.items():
             self._attach_custom_handler(handler_id, update_type, handler)

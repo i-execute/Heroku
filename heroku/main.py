@@ -662,7 +662,7 @@ class Heroku:
                 f"• {upd}\n"
             )
             if not self.omit_log:
-                print(logo)
+                logging.info("\n%s", logo)
                 logging.debug(
                     "\n Heroku %s #%s (%s) started",
                     ".".join(list(map(str, list(__version__)))),

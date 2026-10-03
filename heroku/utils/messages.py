@@ -410,7 +410,6 @@ async def answer(
                 return result
 
         if edit:
-            kwargs.pop("invert_media", None)
             result = await message.edit(
                 text,
                 parse_mode=lambda t: (t, entities),
@@ -433,6 +432,7 @@ async def answer(
                 result = await sent.edit(
                     text,
                     file=file,
+                    invert_media=True,
                     parse_mode=lambda t: (t, entities),
                     **{k: v for k, v in kwargs.items() if k != "reply_to"},
                 )

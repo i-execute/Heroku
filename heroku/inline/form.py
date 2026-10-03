@@ -402,7 +402,7 @@ class Form(InlineUnit):
                                 description=(
                                     self.translator.getkey("inline.keep_id").format("")
                                 ),
-                                text="\u2063",
+                                text="📝",
                                 parse_mode="HTML",
                                 link_preview=False,
                                 id=utils.rand(20),

@@ -59,10 +59,11 @@ class Tester(loader.Module):
             ),
             loader.ConfigValue(
                 "tglog_level",
-                "ERROR",
+                "INFO",
                 (
                     " Do not touch, if you don't know what it does!\n"
-                    "Minimal loglevel for records to be sent in Telegram."
+                    "INFO and higher service logs are always sent. ALL and DEBUG"
+                    " also include debug records."
                 ),
                 validator=loader.validators.Choice(
                     ["ALL", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "DISABLE"]
@@ -71,7 +72,7 @@ class Tester(loader.Module):
             ),
             loader.ConfigValue(
                 "ignore_common",
-                True,
+                False,
                 "Ignore common errors (e.g. 'TypeError' in telethon)",
                 validator=loader.validators.Boolean(),
                 on_change=self._pass_config_to_logger,
